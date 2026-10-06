@@ -45,7 +45,14 @@ function sharedSounds(): Plugin {
 export default defineConfig({
   plugins: [sharedSounds()],
   clearScreen: false,
-  server: { port: 1420, strictPort: true, host: "127.0.0.1" },
+  server: {
+    port: 1420,
+    strictPort: true,
+    host: "127.0.0.1",
+    // cargo rewrites DLLs under target/ while the app rebuilds; watching them
+    // makes Windows throw EBUSY and takes the dev server down.
+    watch: { ignored: ["**/target/**", "**/src-tauri/**", "**/hook/**"] },
+  },
   envPrefix: ["VITE_", "TAURI_ENV_"],
   build: {
     target: "chrome110",

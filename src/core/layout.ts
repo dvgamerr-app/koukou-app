@@ -60,10 +60,10 @@ export const NOTCH_H = 32;
 export const COMPACT_W = 288; // NOTCH_W + 104
 /** Compact island with nothing to say: just wide enough around Mochi (cx 40, ⌀20). */
 export const COMPACT_IDLE_W = 80;
+/** Mini bar (auto-close off, idle): Mochi, the clock, and the weekly limits on hover. */
+export const COMPACT_MINI_W = 244;
 /** Compact island while a session is at work: wide enough to say what it's doing. */
 export const COMPACT_STATUS_W = 380;
-/** Extra room for the 5-hour / 7-day usage meters next to the status. */
-export const COMPACT_USAGE_EXTRA = 112;
 export const EXPANDED_W = 640;
 
 export const ROUNDED_CORNER = 14; // hidden / compact

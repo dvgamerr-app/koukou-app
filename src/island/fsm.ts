@@ -21,6 +21,8 @@ export class IslandStateMachine {
   greetHoverCollapseDelay = 10;
   /** An alert waiting for an answer stays open, even when the mouse leaves. */
   pinned = false;
+  /** false = the compact island never hides; it stays on screen as a mini bar. */
+  autoHide = true;
   /**
    * True while there is still something worth watching (a session at work, a
    * question waiting). The compact island doesn't hide until it turns false.
@@ -112,8 +114,20 @@ export class IslandStateMachine {
 
   // ── Timers ──────────────────────────────────────────────────────────────────
 
+  /** Applies the auto-hide setting: off keeps the island up, on lets it time out. */
+  setAutoHide(on: boolean) {
+    this.autoHide = on;
+    if (!on) {
+      this.clear("petitHide");
+      if (this.state === "hidden") this.transition("petit");
+    } else if (this.state === "petit") {
+      this.schedulePetitHide();
+    }
+  }
+
   private schedulePetitHide() {
     this.clear("petitHide");
+    if (!this.autoHide) return;
     const attempt = () => {
       this.petitHide = null;
       if (this.state !== "petit") return;

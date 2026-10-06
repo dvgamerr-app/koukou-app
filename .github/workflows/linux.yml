@@ -1,8 +1,8 @@
 name: Linux
 
 # Builds the Linux app (AppImage, .deb, .rpm) from the same Tauri project as
-# Windows. Triggered by tags like `linux-v0.1.0`, by hand, and by pull requests
-# that touch the app or this file (build and test only); the Windows
+# Windows. Triggered by tags like `linux-v0.1.0` and by hand only; pull requests
+# are checked by qlty.yml and never built, to save paid runner minutes. The Windows
 # workflow is untouched.
 #
 # Two jobs on purpose. `build` runs npm, cargo and the AppImage tooling (which
@@ -14,13 +14,6 @@ on:
     tags:
       - 'linux-v*'
   workflow_dispatch:
-  # Build and test only. A pull request never uploads artifacts and never
-  # reaches the publish job (see the two gates below), and a fork's token is
-  # read-only anyway.
-  pull_request:
-    paths:
-      - '**'
-      - '.github/workflows/linux.yml'
 
 permissions:
   contents: read
@@ -41,7 +34,7 @@ jobs:
       publish: ${{ steps.gate.outputs.publish }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           persist-credentials: false
 
@@ -56,15 +49,15 @@ jobs:
             librsvg2-dev libssl-dev libdbus-1-dev patchelf \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 22
           # dependencies are installed by bun (bun.lock)
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
             ~/.cargo/registry
@@ -119,7 +112,7 @@ jobs:
       # Upload only on a manual run or when publishing a release, as on Windows.
       # The repo is public, so artifacts are downloadable by any signed-in GitHub
       # user; retention-days: 3 limits exposure.
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: github.event_name == 'workflow_dispatch' || steps.gate.outputs.publish == 'true'
         with:
           name: Koukou-Linux
@@ -139,9 +132,9 @@ jobs:
 
     steps:
       # Only for the linux-latest tag below; nothing from the repo is run.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: Koukou-Linux
           path: release

@@ -201,6 +201,11 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
         if event != "Statusline" {
             log::line(format!("hook {event}"));
         }
+        // Codex has no status line: its limits are read from its session log
+        // right after a hook, so the island always shows the latest value.
+        if payload.get("provider").and_then(Value::as_str) == Some("codex") {
+            crate::codex_usage::refresh(app.clone());
+        }
         let _ = app.emit_to(WINDOW_LABEL, "hook", payload);
         pipe.finish();
         return;

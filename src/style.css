@@ -169,6 +169,13 @@ body {
   color: var(--dim);
 }
 
+#compact-status.clock .txt {
+  text-align: center;
+  font: 600 12px var(--font);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+
 #compact-status b {
   display: flex;
   align-items: center;
@@ -192,19 +199,41 @@ body {
   text-overflow: ellipsis;
 }
 
-/* Plan usage meters — 5-hour and 7-day — at the end of the compact bar. */
+/* Plan usage meters, one group per provider (Claude, Codex) — shown instead of
+   the status text on hover, and as the mini bar when auto-hide is off. */
 #compact-status .usage {
-  flex: 0 0 auto;
-  margin-left: auto;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
   display: flex;
   align-items: center;
-  gap: 9px;
+  justify-content: space-evenly;
+  gap: 14px;
+}
+
+#compact-status .wk {
+  flex: 0 0 auto;
+  font: 600 10px var(--font);
+  color: var(--dim-3);
+  letter-spacing: 0.04em;
+}
+
+#compact-status .prov {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+#compact-status .prov strong {
+  display: flex;
+  font: 600 10px var(--font);
 }
 
 #compact-status .u {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
   font: 600 10px var(--font);
   font-variant-numeric: tabular-nums;
 }
@@ -229,11 +258,15 @@ body {
   border-radius: 2px;
 }
 
+#compact-status .u.na em {
+  color: var(--dim-3);
+}
+
 #compact-status .u em {
   font-style: normal;
   color: var(--ink-2);
   min-width: 24px;
-  text-align: right;
+  text-align: left;
 }
 
 /* A mini Mochi: the slot is the body, the canvas is larger and overflows it so
@@ -1677,4 +1710,40 @@ input[type="range"]::-webkit-slider-thumb {
 
 .int-card.detail {
   padding-top: 8px;
+}
+
+/* Weekly-only limits (mini hover): tighter, so the bar can stay narrow. */
+#compact-status .usage.weekly {
+  gap: 10px;
+}
+
+#compact-status .usage.weekly .prov {
+  gap: 6px;
+}
+
+#compact-status .usage.weekly .u {
+  gap: 4px;
+}
+
+#compact-status .usage.weekly .u b {
+  width: 14px;
+}
+
+#compact-status .usage.weekly .u em {
+  min-width: 22px;
+}
+
+/* Nudge the limits right, away from Mochi, so they read as laid out and not floating. */
+#compact-status .usage {
+  padding-left: 12px;
+}
+
+/* A session is running: status text on the left, weekly limits pinned to the right. */
+#compact-status.with-task .usage {
+  flex: 0 0 auto;
+  margin-left: auto;
+  padding-left: 0;
+  overflow: visible;
+  justify-content: flex-end;
+  gap: 12px;
 }
