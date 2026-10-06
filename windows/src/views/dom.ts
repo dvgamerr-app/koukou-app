@@ -1,3 +1,4 @@
+import { createElement, type IconNode } from "lucide";
 // Minimal DOM helpers — no framework, as specified.
 
 type Attrs = Record<string, string | number | boolean | EventListener | undefined>;
@@ -26,25 +27,11 @@ export function h<K extends keyof HTMLElementTagNameMap>(
   return el;
 }
 
-export function svg(path: string, size = 14, opts: { fill?: string; stroke?: number } = {}): SVGSVGElement {
-  const el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  el.setAttribute("viewBox", "0 0 24 24");
-  el.setAttribute("width", String(size));
-  el.setAttribute("height", String(size));
-  el.setAttribute("aria-hidden", "true");
-  const p = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  p.setAttribute("d", path);
-  if (opts.stroke) {
-    p.setAttribute("fill", "none");
-    p.setAttribute("stroke", "currentColor");
-    p.setAttribute("stroke-width", String(opts.stroke));
-    p.setAttribute("stroke-linecap", "round");
-    p.setAttribute("stroke-linejoin", "round");
-  } else {
-    p.setAttribute("fill", opts.fill ?? "currentColor");
-  }
-  el.append(p);
-  return el;
+export function svg(icon: IconNode, size = 14, opts: { stroke?: number } = {}): SVGElement {
+  return createElement(icon, {
+    width: size, height: size, "stroke-width": opts.stroke || 2,
+    "aria-hidden": "true", focusable: "false",
+  });
 }
 
 export function clear(el: Element) {

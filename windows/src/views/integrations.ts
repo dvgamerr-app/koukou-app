@@ -201,7 +201,7 @@ function resendCard(): HTMLElement {
 
 // ── GitHub ────────────────────────────────────────────────────────────────────
 
-function statRow(icon: string, color: string, label: string, value: string): HTMLElement {
+function statRow(icon: Parameters<typeof svg>[0], color: string, label: string, value: string): HTMLElement {
   return h(
     "div",
     { class: "int-stat" },
