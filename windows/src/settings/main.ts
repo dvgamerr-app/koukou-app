@@ -43,35 +43,39 @@ function renderDiff(text: string): HTMLElement {
 
 // ── Claude Code section ───────────────────────────────────────────────────────
 
-function claudeSection(status: HookStatus): HTMLElement {
+function hooksSection(status: HookStatus, codex = false): HTMLElement {
+  const label = codex ? "Codex" : "Claude Code";
+  const filename = codex ? "hooks.json" : "settings.json";
   const body = h("div", { style: "display:flex;flex-direction:column;gap:12px" });
   const section = h(
     "section",
     {},
-    h("h2", {}, statusDot(status.installed), h("span", { text: "Claude Code" })),
+    h("h2", {}, statusDot(status.installed), h("span", { text: label })),
     body,
   );
 
   const rebuild = async () => {
-    const fresh = await Bridge.hooksStatus();
+    const fresh = await (codex ? Bridge.codexHooksStatus() : Bridge.hooksStatus());
     if (fresh) Object.assign(status, fresh);
     clear(body);
     draw();
     const head = section.querySelector("h2")!;
     clear(head);
-    head.append(statusDot(status.installed), h("span", { text: "Claude Code" }));
+    head.append(statusDot(status.installed), h("span", { text: label }));
   };
 
   function draw() {
     body.append(
       h("div", {
         class: "hint",
-        text: status.installed
+        text: codex
+          ? `${status.installed ? "Coucou's Codex hooks are installed." : "Install hooks to connect Codex sessions to the island."} See tool activity, completion and permission requests. After installing, review and trust the hooks in Codex (/hooks in the CLI).`
+          : status.installed
           ? "Coucou is hooked into your Claude Code sessions. Tool calls, questions and permission requests show up in the island, and you can answer them there."
           : "Install the hooks to see your Claude Code sessions in the island and approve permissions without leaving what you are doing.",
       }),
       h("div", { class: "row" },
-        h("label", { text: "settings.json" }),
+        h("label", { text: filename }),
         h("span", { class: "path", text: status.settingsPath }),
       ),
       h("div", { class: "row" },
@@ -80,6 +84,13 @@ function claudeSection(status: HookStatus): HTMLElement {
         statusDot(status.hookReady),
       ),
     );
+
+    if (!codex && status.installed && !status.usage) {
+      body.append(h("div", {
+        class: "notice warn",
+        text: "Plan usage (5-hour and weekly) isn't connected yet. Reinstall the hooks: Coucou takes the statusLine slot and keeps running your own status line behind it.",
+      }));
+    }
 
     if (!status.hookReady) {
       body.append(h("div", {
@@ -114,7 +125,7 @@ function claudeSection(status: HookStatus): HTMLElement {
   async function showPreview(install: boolean) {
     let preview;
     try {
-      preview = await Bridge.hooksPreview(install);
+      preview = await (codex ? Bridge.codexHooksPreview(install) : Bridge.hooksPreview(install));
     } catch (err) {
       // An unreadable or invalid settings.json stops here rather than being
       // treated as empty and written over.
@@ -133,9 +144,11 @@ function claudeSection(status: HookStatus): HTMLElement {
     body.append(
       h("div", {
         class: "hint",
-        text: install
-          ? "This is exactly what will change in your settings.json. Your own hooks are left untouched."
-          : "This removes Coucou's entries only. Your own hooks are left untouched.",
+        text: codex
+          ? `This shows exactly what will change in ${filename}. ${install ? "Adds Codex session, tool, completion and approval hooks." : "Removes Coucou's Codex hooks."} Your own hooks are preserved. A backup is saved before writing.`
+          : install
+          ? "This is exactly what will change in your settings.json. Your own hooks are left untouched. If you have a status line, Coucou runs it behind its own, so it looks the same, and puts it back when you uninstall."
+          : "This removes Coucou's entries only, and puts your own status line back. Your own hooks are left untouched.",
       }),
       renderDiff(preview.diff),
       h("div", { class: "row" },
@@ -149,11 +162,15 @@ function claudeSection(status: HookStatus): HTMLElement {
     confirm.addEventListener("click", async () => {
       confirm.disabled = true;
       try {
-        const backup = await Bridge.hooksApply(install, preview.fingerprint);
+        const backup = await (codex
+          ? Bridge.codexHooksApply(install, preview.fingerprint)
+          : Bridge.hooksApply(install, preview.fingerprint));
         clear(body);
         body.append(h("div", {
           class: "notice ok",
-          text: `Done. Previous settings saved as ${backup}. Open a new Claude Code session to pick the hooks up.`,
+          text: codex
+            ? `Done. Backup: ${backup}. ${install ? "Open a new Codex session and review/trust the hooks (/hooks in the CLI)." : "Coucou's Codex hooks were removed."}`
+            : `Done. Previous settings saved as ${backup}. Open a new Claude Code session to pick the hooks up.`,
         }));
         window.setTimeout(() => void rebuild(), 2600);
       } catch (err) {
@@ -375,9 +392,19 @@ function generalSection(): HTMLElement {
     value: String(Math.round(settings.autoCloseInterval)),
     style: "width:72px",
   }) as HTMLInputElement;
+  // The last non-zero value, restored when auto-close is switched back on.
+  let lastAutoClose = settings.autoCloseInterval > 0 ? settings.autoCloseInterval : 15;
+  autoClose.disabled = settings.autoCloseInterval <= 0;
   autoClose.addEventListener("change", () => {
     settings.autoCloseInterval = Math.max(5, Math.min(120, Number(autoClose.value) || 15));
+    lastAutoClose = settings.autoCloseInterval;
     autoClose.value = String(settings.autoCloseInterval);
+    void save();
+  });
+  const autoCloseToggle = toggle(settings.autoCloseInterval > 0, (on) => {
+    settings.autoCloseInterval = on ? lastAutoClose : 0;
+    autoClose.disabled = !on;
+    autoClose.value = String(Math.round(lastAutoClose));
     void save();
   });
 
@@ -397,14 +424,20 @@ function generalSection(): HTMLElement {
     {},
     h("h2", {}, h("span", { text: "General" })),
     h("div", { class: "row" },
+      h("label", { text: "Keyboard shortcuts (Windows)" }),
+      toggle(settings.shortcutsEnabled, (v) => { settings.shortcutsEnabled = v; void save(); }),
+    ),
+    h("div", { class: "hint", text: "Win + Left Alt — Toggle expanded / compact · Win + Menu — Drop file. Menu is the context-menu key beside the right Ctrl key." }),
+    h("div", { class: "row" },
       h("label", { text: "Sound" }),
       toggle(settings.soundEnabled, (v) => { settings.soundEnabled = v; void save(); }),
       volume,
     ),
     h("div", { class: "row" },
       h("label", { text: "Auto-close" }),
+      autoCloseToggle,
       autoClose,
-      h("span", { class: "hint", text: "seconds after you leave the island" }),
+      h("span", { class: "hint", text: "seconds after you leave the island (off = never hide)" }),
     ),
     h("div", { class: "row" },
       h("label", { text: "Island lives on" }),
@@ -426,7 +459,10 @@ async function main() {
     version = boot.version;
   }
   const status = (await Bridge.hooksStatus()) ?? {
-    installed: false, settingsPath: "", hookPath: "", hookReady: false,
+    installed: false, settingsPath: "", hookPath: "", hookReady: false, usage: false,
+  };
+  const codexStatus = (await Bridge.codexHooksStatus()) ?? {
+    installed: false, settingsPath: "", hookPath: "", hookReady: false, usage: false,
   };
 
   const hasKey = (await Bridge.secretPresent("anthropic-api-key")) ?? false;
@@ -441,7 +477,8 @@ async function main() {
   clear(root);
   root.append(
     h("h1", {}, h("span", { text: "Coucou" }), h("span", { class: "version", text: version })),
-    claudeSection(status),
+    hooksSection(status),
+    hooksSection(codexStatus, true),
     apiSection(hasKey),
     integrationsSection(present),
     generalSection(),

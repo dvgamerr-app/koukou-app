@@ -53,6 +53,18 @@ async function main() {
 
   await onEvent<null>("screen-changed", () => void Bridge.reposition());
 
+  await onEvent<string>("shortcut", (action) => {
+    if (!State.settings.shortcutsEnabled) return;
+    setPaused(false);
+    if (action === "drop") {
+      island.alert("upload");
+    } else if (State.mode === "expanded") {
+      island.collapse();
+    } else {
+      island.alert(State.defaultView());
+    }
+  });
+
   // The settings window writes preferences; apply them here without a restart.
   await onEvent<Settings>("settings-changed", (s) => {
     State.settings = { ...State.settings, ...s };
