@@ -35,16 +35,16 @@ function makeRow(): Row {
   check.style.color = "#454850"; // the completed tick is dimmer than the chevron
   check.style.position = "absolute";
   chevron.style.position = "absolute";
+  // Both texts are pinned to the same box. The dim one used to be an absolute
+  // span with no `top` after an inline one, so it sat a line lower than the
+  // shimmer — right on top of the row below it.
   const shimmer = h("span", { class: "tick-text shimmer" });
-  const dim = h("span", {
-    class: "tick-text",
-    style: "position:absolute;left:0;right:0;color:#6b7079",
-  });
+  const dim = h("span", { class: "tick-text dim" });
   const el = h(
     "div",
     { class: "ticker-row" },
     h("span", { class: "tick-icon", style: "position:relative" }, chevron, check),
-    h("span", { style: "position:relative;flex:1 1 auto;min-width:0" }, shimmer, dim),
+    h("span", { class: "tick-texts" }, shimmer, dim),
   );
   return { el, chevron, check, shimmer, dim, text: "" };
 }
@@ -77,7 +77,8 @@ export class Ticker {
   private c = makeRow(); // incoming
   private queue: string[] = [];
   private startMs: number | null = null;
-  private displayIndex = -1;
+  private displayCount = -1;
+  private taskId: string | null = null;
 
   constructor() {
     this.el = h("div", { class: "ticker" }, this.a.el, this.b.el, this.c.el);
@@ -97,32 +98,31 @@ export class Ticker {
 
   sync(task: AgentTask | null) {
     const steps = task && task.steps.length > 0 ? task.steps : ["…"];
-    const idx = task ? Math.min(task.stepIndex, steps.length - 1) : -1;
+    const total = task?.stepCount ?? 0;
+    const taskId = task?.id ?? null;
 
-    // First render: drop straight into place, no animation.
-    if (this.displayIndex < 0) {
-      this.displayIndex = idx;
-      setText(this.a, idx > 0 ? steps[idx - 1] : "…");
-      setText(this.b, steps[Math.max(idx, 0)]);
-      this.rest();
-      return;
-    }
-
-    // The session restarted (steps were cleared): re-seed rather than scroll.
-    if (idx < this.displayIndex) {
+    // First render, another session took the card, or that session restarted:
+    // drop straight into place rather than scroll another session's steps past.
+    if (this.displayCount < 0 || taskId !== this.taskId || total < this.displayCount) {
+      this.taskId = taskId;
       this.queue = [];
       this.startMs = null;
-      this.displayIndex = idx;
-      setText(this.a, idx > 0 ? steps[idx - 1] : "…");
-      setText(this.b, steps[Math.max(idx, 0)]);
+      this.displayCount = total;
+      setText(this.a, steps.length > 1 ? steps[steps.length - 2] : "…");
+      setText(this.b, steps[steps.length - 1]);
       this.rest();
       return;
     }
 
-    for (let i = this.displayIndex + 1; i <= idx; i++) this.queue.push(steps[i]);
-    this.displayIndex = idx;
+    // `steps` keeps only the last 20, so the index into it stops moving once it is
+    // full — that froze the ticker for good. The running count never stops.
+    const fresh = Math.min(total - this.displayCount, steps.length);
+    for (let i = steps.length - fresh; i < steps.length; i++) this.queue.push(steps[i]);
+    this.displayCount = total;
     if (this.queue.length > MAX_QUEUE) {
-      this.queue = this.queue.slice(-MAX_QUEUE);
+      // queue[0] is on screen mid-scroll while a transition runs; keep it.
+      const head = this.startMs != null ? this.queue.slice(0, 1) : [];
+      this.queue = [...head, ...this.queue.slice(head.length).slice(-(MAX_QUEUE - head.length))];
     }
   }
 

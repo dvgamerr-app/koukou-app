@@ -3,12 +3,15 @@
 
 export type FsmState = "hidden" | "petit" | "home" | "coucou";
 
+/** How often a held compact island looks again for everything going idle. */
+const PETIT_RECHECK_MS = 5000;
+
 export class IslandStateMachine {
   state: FsmState = "hidden";
 
   onTransition: ((from: FsmState, to: FsmState) => void) | null = null;
 
-  /** home → petit delay, seconds. */
+  /** home → petit delay, seconds. 0 turns auto-close off. */
   homeToPetitDelay = 15;
   /** petit → hidden delay, seconds. */
   petitToHiddenDelay = 60;
@@ -18,6 +21,11 @@ export class IslandStateMachine {
   greetHoverCollapseDelay = 10;
   /** An alert waiting for an answer stays open, even when the mouse leaves. */
   pinned = false;
+  /**
+   * True while there is still something worth watching (a session at work, a
+   * question waiting). The compact island doesn't hide until it turns false.
+   */
+  holdPetit: () => boolean = () => false;
 
   private petitHide: number | null = null;
   private homeCollapse: number | null = null;
@@ -106,15 +114,24 @@ export class IslandStateMachine {
 
   private schedulePetitHide() {
     this.clear("petitHide");
-    this.petitHide = window.setTimeout(() => {
+    const attempt = () => {
       this.petitHide = null;
-      if (this.state === "petit") this.transition("hidden");
-    }, this.petitToHiddenDelay * 1000);
+      if (this.state !== "petit") return;
+      // Sessions still working: stay, and look again shortly. Once the last one
+      // goes idle the island hides within one recheck.
+      if (this.holdPetit()) {
+        this.petitHide = window.setTimeout(attempt, PETIT_RECHECK_MS);
+        return;
+      }
+      this.transition("hidden");
+    };
+    this.petitHide = window.setTimeout(attempt, this.petitToHiddenDelay * 1000);
   }
 
   private scheduleHomeCollapse() {
     this.clear("homeCollapse");
-    if (this.pinned) return;
+    // 0 = auto-close off: the island stays open until closed by hand.
+    if (this.pinned || this.homeToPetitDelay <= 0) return;
     this.homeCollapse = window.setTimeout(() => {
       this.homeCollapse = null;
       if (this.state === "home") this.transition("petit");

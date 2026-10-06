@@ -4,23 +4,32 @@
 import { Tracked, Spring, clamp } from "../core/anim";
 import { Bridge, IS_TAURI, onDragDrop } from "../core/bridge";
 import {
+  COMPACT_IDLE_W, COMPACT_STATUS_W, COMPACT_USAGE_EXTRA, COMPACT_W,
   EXPANDED_CORNER, EXPANDED_W, NOTCH_W, PANEL_H, PANEL_W,
   ROUNDED_CORNER, VIEW_LAYOUTS, botGlowColor, botGlowOpacity, botPosition, chatPromptHeight,
   islandSize,
-  type IslandMode, type IslandViewName,
+  type BotStateName, type IslandMode, type IslandViewName,
 } from "../core/layout";
 import { Sound } from "../core/sound";
-import { State } from "../core/state";
+import { isLive, usageColor, type UsageWindow } from "../core/usage";
+import { State, isSession, type AgentTask } from "../core/state";
 import { BotEngine, hexToRGB } from "../mochi/engine";
 import { Greeting } from "../mochi/greeting";
-import { createMiniBot, pruneMiniBots, syncMiniBotStates, tickMiniBots } from "../mochi/minibots";
+import { syncMiniBotStates, tickMiniBots } from "../mochi/minibots";
 import { UploadCanvas } from "../upload/canvas";
 import { USC, UploadSeq } from "../upload/sequence";
 import { buildHeader, buildViews, type ViewActions, type ViewHost } from "../views/views";
-import { h } from "../views/dom";
+import { h, dot } from "../views/dom";
+import { isActive, isBusy, statusColor, statusText } from "../views/status";
 import { IslandStateMachine } from "./fsm";
 
 const BOT_OVERHANG = 40;
+/** Views a Finished / Error card may take over: nothing is lost by leaving them. */
+const INTERRUPTIBLE_VIEWS: ReadonlySet<IslandViewName> = new Set([
+  "overview", "empty", "finished", "error", "note", "greeting",
+]);
+/** How long a session that finished out of view holds the compact bar. */
+const ANNOUNCE_MS = 5000;
 /** Same margin as the Rust hit test (src-tauri/src/island.rs). */
 const HIT_MARGIN = 14;
 
@@ -43,9 +52,12 @@ export class Island {
   private botCanvas!: HTMLCanvasElement;
   private botGlow!: HTMLElement;
   private greetingCanvas!: HTMLCanvasElement;
-  private miniGrid!: HTMLElement;
   private countdown!: HTMLElement;
   private wakeStrip!: HTMLElement;
+  private compactStatus!: HTMLElement;
+  private compactName!: HTMLElement;
+  private compactText!: HTMLElement;
+  private compactUsage!: HTMLElement;
 
   private header!: ViewHost;
   private views!: Map<IslandViewName, ViewHost>;
@@ -88,6 +100,13 @@ export class Island {
   private uploadTens = 0;
   private uploadDone = false;
 
+  /** The session the compact island is talking about, and whether it is wide for it. */
+  private compactSessionId: string | null = null;
+  private compactW = COMPACT_W;
+  /** A session that just finished out of view, shown on the compact bar for a moment. */
+  private announced: { id: string; until: number } | null = null;
+  private announceTimer: number | null = null;
+
   constructor(root: HTMLElement) {
     this.root = root;
     this.build();
@@ -110,11 +129,14 @@ export class Island {
       setFocus: (id) => {
         State.setFocus(id);
         Sound.play("blip");
+        // The badge said this session is waiting on a decision: take them to it.
+        const req = State.pendingApproval;
+        if (req && State.sessionTask(req.sessionId)?.id === id) {
+          this.setView(req.questions ? "ask" : "approval");
+        }
       },
-      openTerminal: () => {
-        const cwd = State.focusTask?.sessionCwd ?? null;
-        void Bridge.openInVSCode(cwd);
-      },
+      // From the Finished card: the window of the session that finished.
+      openTerminal: () => void this.openSessionWindow(State.alertTask),
       // The ↗ button — same targets as openAgentTarget() on macOS.
       openTarget: () => {
         const task = State.focusTask;
@@ -127,7 +149,7 @@ export class Island {
           integration_notion: "https://notion.so",
           integration_calcom: "https://app.cal.com/bookings",
         };
-        if (task.id === "integration_claude") void Bridge.openInVSCode(task.sessionCwd ?? null);
+        if (task.source === "claudeCode" || task.source === "codex") void this.openSessionWindow(task);
         else if (task.id === "integration_n8n") void Bridge.openN8n();
         else if (urls[task.id]) void Bridge.openUrl(urls[task.id]);
       },
@@ -140,12 +162,24 @@ export class Island {
         if (!req) return;
         Sound.play(d === "deny" ? "blip" : "approve");
         void Bridge.approvalDecision(req.requestId, d);
-        State.pendingApproval = null;
-        State.isPinned = false;
-        this.fsm.pinned = false;
-        State.updateTask("integration_claude", "working");
-        State.setPillBadge("integration_claude", null);
-        this.setView(State.defaultView());
+        this.settleApproval();
+      },
+      answer: (choices) => {
+        const req = State.pendingApproval;
+        void Bridge.log(`answer req=${req?.requestId ?? "none"} ${JSON.stringify(choices)}`);
+        if (!req?.questions) return;
+        Sound.play("approve");
+        void Bridge.approvalAnswer(req.requestId, choices);
+        this.settleApproval();
+      },
+      answerInTerminal: () => {
+        const req = State.pendingApproval;
+        if (!req) return;
+        Sound.play("blip");
+        // Releasing the relay without a decision: Claude Code shows the question
+        // in the terminal right away, with its free-text "Other" option.
+        void Bridge.approvalDecline(req.requestId);
+        this.settleApproval();
       },
       toggleSound: () => {
         State.settings.soundEnabled = !State.settings.soundEnabled;
@@ -173,8 +207,17 @@ export class Island {
     this.botGlow = h("div", { id: "bot-glow" });
     this.botCanvas = h("canvas", { id: "bot-canvas" });
     this.greetingCanvas = h("canvas", { id: "greeting-canvas" });
-    this.miniGrid = h("div", { id: "mini-grid" });
     this.countdown = h("div", { id: "countdown" });
+    this.compactName = h("b");
+    this.compactText = h("span", { class: "txt" });
+    this.compactUsage = h("span", { class: "usage" });
+    this.compactStatus = h(
+      "div",
+      { id: "compact-status" },
+      this.compactName,
+      this.compactText,
+      this.compactUsage,
+    );
 
     this.header = buildHeader(actions);
     this.views = buildViews(actions, () => this.animateGeometry(false));
@@ -207,8 +250,8 @@ export class Island {
       this.clipEl,
       this.botGlow,
       this.botCanvas,
-      this.miniGrid,
       this.countdown,
+      this.compactStatus,
     );
 
     const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -225,6 +268,9 @@ export class Island {
 
   private wireFsm() {
     this.fsm.homeToPetitDelay = State.settings.autoCloseInterval;
+    // The compact island stays while any session is still at work or waiting on
+    // the user, and hides only once every one of them has gone idle.
+    this.fsm.holdPetit = () => State.sessionTasks.some((t) => isActive(t));
     this.fsm.onTransition = (from, to) => {
       switch (to) {
         case "hidden":
@@ -323,6 +369,20 @@ export class Island {
     this.fsm.forcePetit();
   }
 
+  /** A request was answered, either way: drop the card and let the session carry on. */
+  private settleApproval() {
+    const req = State.pendingApproval;
+    State.pendingApproval = null;
+    State.isPinned = false;
+    this.fsm.pinned = false;
+    const task = req ? State.sessionTask(req.sessionId) : null;
+    if (task) {
+      State.updateTask(task.id, "working");
+      State.setPillBadge(task.id, null);
+    }
+    this.setView(State.defaultView());
+  }
+
   /** Alert from the hook server: open on this view. Pinned alerts never auto-close. */
   alert(view: IslandViewName) {
     this.fsm.pinned = State.isPinned;
@@ -332,6 +392,51 @@ export class Island {
 
   reveal() {
     this.fsm.reveal();
+  }
+
+  /**
+   * Brings forward the window a session runs in — its VS Code window or its
+   * terminal, which must still be open since the session ran in it. Only when
+   * that window can't be found does it fall back to opening the folder.
+   */
+  private async openSessionWindow(task: AgentTask | null) {
+    const cwd = task?.sessionCwd ?? null;
+    if (task?.windowPids?.length || task?.consoleHwnd != null) {
+      const found = await Bridge.focusSessionWindow(task.windowPids ?? [], task.consoleHwnd ?? null, cwd);
+      if (found) {
+        this.collapse();
+        return;
+      }
+    }
+    void Bridge.openInVSCode(cwd);
+  }
+
+  /**
+   * Whether a Finished / Error card may replace what is on screen. Not over a
+   * decision waiting to be made, a message being typed, a file being dropped
+   * or the settings — those get the compact announcement and the badge instead.
+   */
+  canPopUp(): boolean {
+    if (State.pendingApproval) return false;
+    if (State.mode !== "expanded") return true;
+    return INTERRUPTIBLE_VIEWS.has(State.view);
+  }
+
+  /**
+   * A session nobody is watching just finished (or failed). It doesn't take the
+   * view, but it does take the compact bar for a few seconds — its Mochi, its
+   * name, "Finished" — revealing the bar first if it was hidden.
+   */
+  announce(taskId: string) {
+    this.announced = { id: taskId, until: performance.now() + ANNOUNCE_MS };
+    if (State.mode === "hidden") this.fsm.reveal();
+    if (this.announceTimer != null) window.clearTimeout(this.announceTimer);
+    this.announceTimer = window.setTimeout(() => {
+      this.announceTimer = null;
+      this.announced = null;
+      State.notify();
+    }, ANNOUNCE_MS);
+    State.notify();
   }
 
   /** An alert stopped waiting for an answer: let the island auto-close again. */
@@ -450,7 +555,7 @@ export class Island {
   // ── Geometry ────────────────────────────────────────────────────────────────
 
   private targetSize(): { w: number; h: number; r: number } {
-    const { w, h } = islandSize(State.mode, State.view, State.chatHistory.length);
+    const { w, h } = islandSize(State.mode, State.view, State.chatHistory.length, this.compactW);
     const r = State.mode === "expanded" ? EXPANDED_CORNER : ROUNDED_CORNER;
     return { w, h, r };
   }
@@ -479,8 +584,6 @@ export class Island {
     this.islandEl.style.transform = `translateX(-50%)`;
     // These follow the island as it resizes, so they belong here rather than in
     // the state-driven DOM sync.
-    this.miniGrid.style.left = `${w - 40 - 14.5}px`;
-    this.miniGrid.style.top = `${hh / 2 - 14.5}px`;
     this.greetingCanvas.style.left = `${(w - EXPANDED_W) / 2}px`;
     this.uploadCanvas.el.style.left = `${(w - EXPANDED_W) / 2}px`;
 
@@ -592,10 +695,13 @@ export class Island {
     }
     if (!inIsland && this.wasInIsland) {
       this.fsm.mouseLeft();
-      if (this.fsm.state === "home" && !State.isPinned) {
+      if (this.fsm.state === "home" && !State.isPinned && State.settings.autoCloseInterval > 0) {
         this.homeCollapseAt = performance.now() + State.settings.autoCloseInterval * 1000;
       }
     }
+    // The compact bar shows the plan usage only under the pointer: re-sync on
+    // the way in and out.
+    if (inIsland !== this.wasInIsland) this.dirty = true;
     this.wasInIsland = inIsland;
 
     // Bot hover → love
@@ -660,7 +766,7 @@ export class Island {
     this.confusedRecovery = window.setTimeout(() => {
       this.confusedRecovery = null;
       State.stateOverride = null;
-      this.engine.setState(State.effectiveState);
+      this.engine.setState(this.botState());
       if (State.view === "confused") {
         const fallback = State.defaultView();
         this.setView(this.prevViewBeforeConfused === "confused" ? fallback : this.prevViewBeforeConfused);
@@ -733,7 +839,8 @@ export class Island {
       ? settling
       : settling ||
         !this.botCx.settled || !this.botCy.settled || !this.botSize.settled ||
-        greetingActive || this.engine.busy || UploadSeq.isActive;
+        greetingActive || this.engine.busy || UploadSeq.isActive ||
+        !!this.views.get(State.view)?.animating;
 
     if (busy) {
       requestAnimationFrame(this.frame);
@@ -756,14 +863,14 @@ export class Island {
 
     if (State.mode === "expanded" && State.view !== "uploading" && !greetingActive && !this.uploadActive) {
       const d = p.diameter;
-      const color = botGlowColor(State.effectiveState);
+      const color = botGlowColor(this.botState());
       this.botGlow.style.display = "block";
       this.botGlow.style.width = `${d * 2.2}px`;
       this.botGlow.style.height = `${d * 2.2}px`;
       this.botGlow.style.left = `${this.botCx.value - d * 1.1}px`;
       this.botGlow.style.top = `${this.botCy.value - d * 1.1}px`;
       this.botGlow.style.background = `radial-gradient(circle, ${color} 0%, transparent 62%)`;
-      this.botGlow.style.opacity = String(botGlowOpacity(State.effectiveState));
+      this.botGlow.style.opacity = String(botGlowOpacity(this.botState()));
     } else {
       this.botGlow.style.display = "none";
     }
@@ -787,8 +894,9 @@ export class Island {
     const ctx = this.botCanvas.getContext("2d");
     if (!ctx) return;
 
-    const focus = State.focusTask;
-    this.engine.bodyColor = focus?.isIntegration ? hexToRGB(focus.color) : null;
+    const focus = this.botTask();
+    // Sessions have their own colours too, so the big Mochi matches its bubble.
+    this.engine.bodyColor = focus ? hexToRGB(focus.color) : null;
     this.engine.particleOverhang = BOT_OVERHANG;
     this.engine.lookX = this.lookX();
     this.engine.lookY = this.lookY();
@@ -860,24 +968,125 @@ export class Island {
       }
     }
 
-    // Compact mini grid
-    const showGrid = State.mode === "compact";
-    this.miniGrid.style.opacity = showGrid ? "1" : "0";
-    if (showGrid) {
-      const others = State.otherTasks.slice(0, 4);
-      const key = others.map((t) => t.id).join("|");
-      if (this.miniGrid.dataset.key !== key) {
-        this.miniGrid.dataset.key = key;
-        this.miniGrid.replaceChildren();
-        for (const t of others) {
-          this.miniGrid.append(createMiniBot(t, 13));
-        }
-        pruneMiniBots();
-      }
+    this.syncCompactStatus();
+    syncMiniBotStates(State.tasks);
+    this.engine.setState(this.botState());
+  }
+
+  /**
+   * Whose Mochi the island shows. Compact has room for one Mochi only, so it is
+   * the session at work — the one the status line is about — rather than
+   * whichever pill was last focused.
+   */
+  /** What Mochi (and its glow) is showing: a dizzy override, else its task's state. */
+  private botState(): BotStateName {
+    return State.stateOverride ?? this.botTask()?.state ?? "idle";
+  }
+
+  private botTask(): AgentTask | null {
+    // The Finished / Error card is about one session: its Mochi, not the focus's.
+    if (State.mode === "expanded" && (State.view === "finished" || State.view === "error")) {
+      return State.alertTask;
+    }
+    if (State.mode === "compact" && this.compactSessionId) {
+      const task = State.tasks.find((t) => t.id === this.compactSessionId);
+      if (task) return task;
+    }
+    return State.focusTask;
+  }
+
+  /**
+   * The session the compact island reports on: the one waiting on a decision,
+   * else the focused one if it is busy, else whichever it was already showing —
+   * so two busy windows don't make it flip — else the latest to do something.
+   */
+  private pickCompactTask(): AgentTask | null {
+    const req = State.pendingApproval;
+    const waiting = req ? State.sessionTask(req.sessionId) : null;
+    if (waiting) return waiting;
+    // Just finished out of view: its moment on the bar.
+    if (this.announced && performance.now() < this.announced.until) {
+      const done = State.tasks.find((t) => t.id === this.announced?.id);
+      if (done) return done;
+    }
+    // The same test that keeps the compact island up, so what it shows and
+    // whether it stays always agree.
+    const now = performance.now();
+    const active = (t: AgentTask | null | undefined): t is AgentTask =>
+      isSession(t) && isActive(t, now);
+    const focus = State.focusTask;
+    if (active(focus)) return focus;
+    const sessions = State.sessionTasks;
+    const sticky = sessions.find((t) => t.id === this.compactSessionId);
+    if (active(sticky)) return sticky;
+    let latest: AgentTask | null = null;
+    for (const t of sessions) {
+      if (active(t) && (t.lastWorkAt ?? 0) > (latest?.lastWorkAt ?? -1)) latest = t;
+    }
+    return latest;
+  }
+
+  /**
+   * Compact island: which session and what it is doing, next to Mochi, and —
+   * while the pointer is over the bar — the plan usage, 5-hour and 7-day.
+   */
+  private syncCompactStatus() {
+    const task = this.pickCompactTask();
+    this.compactSessionId = task?.id ?? null;
+
+    const nowS = Date.now() / 1000;
+    const windows: [string, UsageWindow][] = [];
+    if (isLive(State.usage.fiveHour, nowS)) windows.push(["5h", State.usage.fiveHour]);
+    if (isLive(State.usage.sevenDay, nowS)) windows.push(["7d", State.usage.sevenDay]);
+    // Usage is something you look up, not something to keep in view: hover only.
+    const hasUsage = windows.length > 0 && this.wasInIsland;
+
+    // Usage alone fits the plain compact width; the status needs room of its own.
+    // Idle with nothing to show: shrink to just Mochi.
+    const w = task
+      ? COMPACT_STATUS_W + (hasUsage ? COMPACT_USAGE_EXTRA : 0)
+      : hasUsage
+        ? COMPACT_W
+        : COMPACT_IDLE_W;
+    if (w !== this.compactW) {
+      const grew = w > this.compactW;
+      this.compactW = w;
+      if (State.mode === "compact") this.animateGeometry(!grew);
     }
 
-    syncMiniBotStates(State.tasks);
-    this.engine.setState(State.effectiveState);
+    const show = State.mode === "compact" && (task != null || hasUsage);
+    this.compactStatus.style.display = show ? "flex" : "none";
+    if (!show) return;
+
+
+    this.compactName.style.display = task ? "" : "none";
+    this.compactText.style.display = task ? "" : "none";
+    if (task) {
+      this.compactName.replaceChildren(dot(task.color, 6), task.name);
+      const text = statusText(task);
+      if (this.compactText.textContent !== text) this.compactText.textContent = text;
+      this.compactText.classList.toggle("shimmer", isBusy(task));
+      this.compactText.style.color = statusColor(task) ?? "";
+    }
+
+    const key = windows.map(([label, u]) => `${label}:${Math.round(u.pct)}`).join("|");
+    if (this.compactUsage.dataset.key !== key) {
+      this.compactUsage.dataset.key = key;
+      this.compactUsage.replaceChildren(
+        ...windows.map(([label, u]) => {
+          const pct = Math.min(100, Math.round(u.pct));
+          const fill = h("s");
+          fill.style.width = `${pct}%`;
+          fill.style.background = usageColor(u.pct);
+          return h("span", { class: "u" },
+            h("i", { text: label }),
+            h("b", {}, fill),
+            h("em", { text: `${pct}%` }),
+          );
+        }),
+      );
+    }
+    this.compactUsage.style.display = hasUsage ? "" : "none";
   }
 
   /** Applies settings coming from Rust at boot. */

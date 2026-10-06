@@ -5,16 +5,16 @@
 
 import { Bridge, onEvent } from "../core/bridge";
 import { Sound } from "../core/sound";
-import { State } from "../core/state";
+import { State, isSession, type AgentTask, type AskOption, type AskQuestion } from "../core/state";
+import { mergeWindow, parseWindow, type UsageWindow } from "../core/usage";
 import type { Island } from "./island";
-
-const CLAUDE_ID = "integration_claude";
 
 /** Clears the approval card if no decision was made before the hook gave up. */
 let pendingTimeout: number | null = null;
 
-interface HookPayload {
+export interface HookPayload {
   hook_event_name?: string;
+  provider?: "codex";
   request_id?: string;
   session_id?: string;
   cwd?: string;
@@ -25,6 +25,12 @@ interface HookPayload {
   tool_input?: Record<string, unknown>;
   /** Optional agent tag: lowercase, digits and hyphens, ≤ 24 chars. */
   coucou_agent?: string;
+  /** Statusline only: `five_hour` / `seven_day` plan usage windows. */
+  rate_limits?: unknown;
+  /** Added by the relay: the session's process chain, nearest first. */
+  ancestor_pids?: unknown[];
+  /** Added by the relay when the session runs in a classic console window. */
+  console_hwnd?: unknown;
 }
 
 /** Same rule as HookServer.validateAgent on macOS. "claude" is reserved. */
@@ -60,29 +66,84 @@ function lastPathComponent(p: string): string {
   return idx >= 0 ? cleaned.slice(idx + 1) : cleaned;
 }
 
-/** frenchStep() — same labels as the macOS app. */
+/**
+ * Step labels, one verb per tool. The macOS app's frenchStep() uses French
+ * ("Exécute", "Écrit"…); the Windows island is English everywhere else, so
+ * its steps are too.
+ */
 const TOOL_LABELS: Record<string, string> = {
-  Bash: "Exécute",
-  Read: "Lit",
-  Write: "Écrit",
-  Edit: "Modifie",
-  Glob: "Cherche",
-  Grep: "Recherche",
-  WebSearch: "Recherche web",
-  WebFetch: "Récupère",
-  TodoWrite: "Tâches",
+  Bash: "Run",
+  Read: "Read",
+  Write: "Write",
+  Edit: "Edit",
+  Glob: "Find",
+  Grep: "Search",
+  WebSearch: "Web search",
+  WebFetch: "Fetch",
+  TodoWrite: "Tasks",
   Task: "Agent",
-  LS: "Liste",
-  MultiEdit: "Modifie",
+  Agent: "Agent",
+  LS: "List",
+  MultiEdit: "Edit",
   NotebookEdit: "Notebook",
-  PowerShell: "Exécute",
+  PowerShell: "Run",
+  apply_patch: "Edit",
 };
+
+/** A step is one line: multi-line commands and prompts collapse to one. */
+function oneLine(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/** Text of the first `<tag>…</tag>` in `s`, or null. */
+function tagText(s: string, tag: string): string | null {
+  const m = new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(s);
+  return m ? oneLine(m[1]) : null;
+}
+
+/**
+ * What a UserPromptSubmit actually says. Not every prompt was typed: Claude
+ * Code also submits markup of its own — a background task reporting back, a
+ * slash command, a `!` shell line — and showing that raw put
+ * "<task-notification> <task-id>…" in the ticker instead of what happened.
+ */
+export function promptStep(raw: string): string | null {
+  // Context Claude Code attaches for the model, never meant to be read here.
+  const text = raw.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, "").trim();
+  if (!text) return null;
+
+  if (text.startsWith("<task-notification>")) {
+    const summary = tagText(text, "summary");
+    const status = tagText(text, "status");
+    return `↩ ${summary ?? (status ? `Background task ${status}` : "Background task update")}`;
+  }
+
+  const command = tagText(text, "command-name");
+  if (command) {
+    const args = tagText(text, "command-args");
+    const name = command.startsWith("/") ? command : `/${command}`;
+    return args ? `${name} ${args}` : name;
+  }
+
+  const bash = tagText(text, "bash-input");
+  if (bash) return `! ${bash}`;
+
+  // Output Claude Code echoes back into the conversation: nothing was asked.
+  if (/^<(local-command-stdout|local-command-stderr|bash-stdout|bash-stderr)>/.test(text)) return null;
+
+  // A typed prompt stays as typed, even one that mentions `<div>`.
+  if (!text.startsWith("<")) return oneLine(text);
+
+  // Some other markup of Claude Code's: keep the words, drop the tags.
+  const plain = oneLine(text.replace(/<\/?[a-z][\w-]*>/gi, " "));
+  return plain || null;
+}
 
 function stepLabel(tool: string, input: Record<string, unknown>): string {
   const label = TOOL_LABELS[tool] ?? tool;
   const str = (k: string) => (typeof input[k] === "string" ? (input[k] as string) : null);
   const cmd = str("command");
-  if (cmd) return `${label} · ${cmd.slice(0, 40)}`;
+  if (cmd) return `${label} · ${oneLine(cmd).slice(0, 40)}`;
   const path = str("path");
   if (path) return `${label} · ${lastPathComponent(path)}`;
   const file = str("file_path");
@@ -120,27 +181,95 @@ function approvalTarget(tool: string, input: Record<string, unknown>): string {
   return tool;
 }
 
-function upsert(projectName: string, cwd: string) {
-  const t = State.tasks.find((x) => x.id === CLAUDE_ID);
-  if (!t) return;
-  t.name = projectName;
-  if (cwd) t.sessionCwd = cwd;
+/** Claude's multiple-choice tool. It reaches us as a PermissionRequest too. */
+const ASK_TOOL = "AskUserQuestion";
+
+/**
+ * The questions of an AskUserQuestion call, or null if they are not in a shape
+ * the card can show. In that case the terminal asks instead: offering Allow on
+ * a question would answer nothing and only skip the question.
+ */
+function parseQuestions(input: Record<string, unknown>): AskQuestion[] | null {
+  const raw = input.questions;
+  if (!Array.isArray(raw) || raw.length === 0) return null;
+  const questions: AskQuestion[] = [];
+  for (const q of raw) {
+    if (!q || typeof q !== "object") return null;
+    const { question, header, options, multiSelect } = q as Record<string, unknown>;
+    if (typeof question !== "string" || !Array.isArray(options) || options.length === 0) return null;
+    const opts: AskOption[] = [];
+    for (const o of options) {
+      const label = (o as Record<string, unknown>)?.label;
+      if (typeof label !== "string" || !label) return null;
+      const description = (o as Record<string, unknown>).description;
+      opts.push({ label, description: typeof description === "string" ? description : undefined });
+    }
+    questions.push({
+      question,
+      header: typeof header === "string" ? header : undefined,
+      options: opts,
+      multiSelect: multiSelect === true,
+    });
+  }
+  return questions;
 }
 
-function clearSession() {
-  const t = State.tasks.find((x) => x.id === CLAUDE_ID);
-  if (!t) return;
-  t.steps = [];
-  t.stepIndex = 0;
-  t.name = "VS Code";
-  t.pillBadge = null;
+/** A session that has said nothing for this long is gone (VS Code was closed). */
+const STALE_MS = 30 * 60 * 1000;
+
+/** Sessions whose window closed without a SessionEnd would linger forever. */
+function pruneStale(now: number) {
+  for (const t of State.sessionTasks) {
+    if (State.pendingApproval?.sessionId === t.sessionId) continue;
+    if (now - (t.lastEventAt ?? now) > STALE_MS) State.removeSession(t.sessionId!);
+  }
 }
+
+/** Fires at the next reset time, so a finished window leaves the bar on time. */
+let usageExpiry: number | null = null;
+
+/**
+ * The status line's usage report. It never creates a session — a status line
+ * also runs for a session that is just sitting there — but it does tell us an
+ * existing one is still alive, which keeps it from being pruned as stale.
+ */
+function handleStatusline(sessionId: string, raw: unknown) {
+  const t = State.sessionTask(sessionId);
+  if (t) t.lastEventAt = performance.now();
+
+  const limits = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const nowS = Date.now() / 1000;
+  const next = {
+    fiveHour: mergeWindow(State.usage.fiveHour, parseWindow(limits.five_hour), nowS),
+    sevenDay: mergeWindow(State.usage.sevenDay, parseWindow(limits.seven_day), nowS),
+  };
+  const same = (a: UsageWindow | null, b: UsageWindow | null) =>
+    a?.pct === b?.pct && a?.resetsAt === b?.resetsAt;
+  if (same(next.fiveHour, State.usage.fiveHour) && same(next.sevenDay, State.usage.sevenDay)) return;
+  State.usage = next;
+
+  if (usageExpiry != null) window.clearTimeout(usageExpiry);
+  const resets = [next.fiveHour, next.sevenDay].filter(Boolean).map((w) => w!.resetsAt);
+  if (resets.length) {
+    const ms = Math.max(1000, (Math.min(...resets) - nowS) * 1000 + 500);
+    // Capped well below setTimeout's 24.8-day ceiling; a 7-day window just rechecks.
+    usageExpiry = window.setTimeout(() => {
+      usageExpiry = null;
+      handleStatusline("", null);
+    }, Math.min(ms, 6 * 3600 * 1000));
+  }
+  State.notify();
+}
+
+/** Stop resets its own session to idle after a moment; one timer per session. */
+const idleTimers = new Map<string, number>();
 
 export function registerHookHandlers(island: Island) {
   void onEvent<HookPayload>("hook", (payload) => handleHook(island, payload));
 }
 
-function handleHook(island: Island, payload: HookPayload) {
+/** Exported for dev/sessions-preview.ts, which plays fake sessions in a browser. */
+export function handleHook(island: Island, payload: HookPayload) {
   if (State.paused) {
     // Silence here used to cost Claude Code nearly two minutes: the relay waited
     // for a decision from an island that had already decided not to look. Say so,
@@ -152,15 +281,60 @@ function handleHook(island: Island, payload: HookPayload) {
   const name = payload.hook_event_name ?? "";
   const cwd = payload.cwd ?? "";
   const raw = lastPathComponent(cwd);
-  const projectName = aliasProjectName(raw || "Session");
+  const projectName = `${payload.provider === "codex" ? "Codex · " : ""}${aliasProjectName(raw || "Session")}`;
+  // Every VS Code window runs its own session. Feeding them all into one task
+  // made the island flip between projects on every event; each gets its own.
+  const sessionId = `${payload.provider === "codex" ? "codex:" : ""}${payload.session_id || "default"}`;
+
+  pruneStale(performance.now());
+
+  if (name === "Statusline") {
+    handleStatusline(sessionId, payload.rate_limits);
+    return;
+  }
 
   // Route to the right pill. Valid coucou_agent → dynamic "agent_<name>" pill.
-  // "claude" is reserved; absent or invalid → Claude Code pill unchanged.
+  // "claude" is reserved; absent or invalid → the session's own pill.
   const validAgent = validateAgent(payload.coucou_agent);
-  const agentId = validAgent ? `agent_${validAgent}` : CLAUDE_ID;
   const isExternalAgent = validAgent !== null;
 
-  const focused = State.focusId === agentId;
+  if (name === "SessionEnd") {
+    if (isExternalAgent) {
+      State.removeTask(`agent_${validAgent}`);
+      return;
+    }
+    const t = State.sessionTask(sessionId);
+    if (t) {
+      window.clearTimeout(idleTimers.get(sessionId));
+      idleTimers.delete(sessionId);
+      State.removeSession(sessionId);
+    }
+    State.notify();
+    return;
+  }
+
+  let task: AgentTask | null;
+  if (isExternalAgent) {
+    const agentId = `agent_${validAgent}`;
+    // Only work events create the pill: a late event after Stop removed it must
+    // not bring it back.
+    if (name === "SessionStart" || name === "UserPromptSubmit" || name === "PreToolUse") {
+      State.upsertExternalAgent(agentId, validAgent, agentColor(validAgent));
+    }
+    task = State.tasks.find((t) => t.id === agentId) ?? null;
+  } else {
+    task = State.ensureSession(sessionId, projectName, cwd, payload.provider === "codex" ? "codex" : "claudeCode");
+    // Only some events carry these (see WINDOW_EVENTS in the relay); keep the last.
+    if (Array.isArray(payload.ancestor_pids) && payload.ancestor_pids.length) {
+      task.windowPids = payload.ancestor_pids.filter((p): p is number => typeof p === "number");
+      task.consoleHwnd = typeof payload.console_hwnd === "number" ? payload.console_hwnd : null;
+    }
+  }
+  const id = task?.id ?? `agent_${validAgent}`;
+  // An external agent whose pill is gone has nothing to show. Its permission
+  // requests still go through the case below, which hands them back.
+  if (!task && name !== "PermissionRequest") return;
+  const focused = task != null && State.focusTask === task;
 
   /** Alerts force the island open; work events only reveal the compact island. */
   const surface = (view: Parameters<Island["alert"]>[0], isAlert: boolean) => {
@@ -173,101 +347,108 @@ function handleHook(island: Island, payload: HookPayload) {
     }
   };
 
-  /** Ensure the agent pill exists (no-op for Claude Code). */
-  const ensurePill = () => {
-    if (isExternalAgent) {
-      State.upsertExternalAgent(agentId, validAgent!, agentColor(validAgent!));
-    } else {
-      upsert(projectName, cwd);
-    }
-  };
-
   switch (name) {
     case "SessionStart":
-      ensurePill();
       surface("overview", false);
       Sound.play("work");
       break;
 
     case "UserPromptSubmit": {
-      ensurePill();
-      State.updateTask(agentId, "thinking");
+      State.updateTask(id, "thinking");
+      // A new turn: "done" or "failed" from the last one no longer holds.
+      if (task?.pillBadge === "finished" || task?.pillBadge === "error") State.setPillBadge(id, null);
       // The field is `prompt`; reading `message` meant this step was always blank.
-      const asked = payload.prompt ?? payload.message;
-      if (asked) State.appendStep(agentId, asked.slice(0, 60));
+      const asked = promptStep(payload.prompt ?? payload.message ?? "");
+      if (asked) State.appendStep(id, asked.slice(0, 60));
       surface("overview", false);
       break;
     }
 
     case "PreToolUse": {
-      ensurePill();
-      State.updateTask(agentId, "working");
+      State.updateTask(id, "working");
       const tool = payload.tool_name ?? "Tool";
-      State.appendStep(agentId, stepLabel(tool, payload.tool_input ?? {}));
+      State.appendStep(id, stepLabel(tool, payload.tool_input ?? {}));
       surface("overview", false);
       break;
     }
 
     case "PostToolUse":
-      State.updateTask(agentId, "working");
+      State.updateTask(id, "working");
+      break;
+
+    case "Interrupt":
+      State.updateTask(id, "idle");
+      State.appendStep(id, "Interrupted");
       break;
 
     case "PostToolUseFailure":
-      State.updateTask(agentId, "working");
-      State.appendStep(agentId, "⚠ failed");
+      State.updateTask(id, "working");
+      State.appendStep(id, "⚠ failed");
       break;
 
     case "Notification": {
       const message = payload.message ?? "";
       const lower = message.toLowerCase();
       if (lower.includes("rate limit") || lower.includes("limite d")) {
-        State.updateTask(agentId, "ratelimit");
+        State.updateTask(id, "ratelimit");
         Sound.play("rate");
       } else if (message.endsWith("?")) {
-        State.updateTask(agentId, "question");
-        State.appendStep(agentId, message);
+        State.updateTask(id, "question");
+        State.appendStep(id, message);
       }
       break;
     }
 
-    case "Stop":
-      State.updateTask(agentId, "finished");
-      if (payload.message) State.appendStep(agentId, payload.message.slice(0, 60));
+    case "Stop": {
+      State.updateTask(id, "finished");
+      if (payload.message) State.appendStep(id, payload.message.slice(0, 60));
       Sound.play("finish");
-      if (focused) surface("finished", true);
-      else State.setPillBadge(agentId, "finished");
-      window.setTimeout(() => {
-        if (isExternalAgent) {
-          State.removeTask(agentId);
-        } else {
-          State.updateTask(agentId, "idle");
-          State.setPillBadge(agentId, null);
-        }
-      }, 5200);
+      // Every session gets its Finished card, watched or not — the card names
+      // the session, and the focus stays where it was. Only when the card would
+      // interrupt something (a decision, a message being typed…) does it fall
+      // back to the compact bar saying so for a moment.
+      if (!focused) State.setPillBadge(id, "finished");
+      if (focused || island.canPopUp()) {
+        State.alertTaskId = id;
+        surface("finished", true);
+      } else {
+        island.announce(id);
+      }
+      if (isExternalAgent) {
+        // An external agent's pill only lives for its turn.
+        window.setTimeout(() => State.removeTask(id), 5200);
+        break;
+      }
+      window.clearTimeout(idleTimers.get(sessionId));
+      idleTimers.set(sessionId, window.setTimeout(() => {
+        idleTimers.delete(sessionId);
+        const t = State.sessionTask(sessionId);
+        if (!t || t.state !== "finished") return;
+        // The badge is left alone: clearing it here made an unwatched session's
+        // "done" vanish five seconds later. Focusing the session clears it.
+        State.updateTask(id, "idle");
+      }, 5200));
       break;
+    }
 
     case "StopFailure":
-      State.updateTask(agentId, "error");
+      State.updateTask(id, "error");
       Sound.play("error");
-      if (focused) surface("error", true);
-      else State.setPillBadge(agentId, "error");
-      break;
-
-    case "SessionEnd":
-      if (isExternalAgent) {
-        State.removeTask(agentId);
+      if (!focused) State.setPillBadge(id, "error");
+      if (focused || island.canPopUp()) {
+        State.alertTaskId = id;
+        surface("error", true);
       } else {
-        State.updateTask(agentId, "idle");
-        clearSession();
+        island.announce(id);
       }
       break;
 
     case "SubagentStart":
-      State.appendStep(agentId, "+ subagent");
+      State.appendStep(id, "+ subagent");
       break;
 
     case "SubagentStop":
-      State.appendStep(agentId, "• subagent done");
+      State.appendStep(id, "• subagent done");
       break;
 
     case "PermissionRequest": {
@@ -287,29 +468,42 @@ function handleHook(island: Island, payload: HookPayload) {
         if (requestId) void Bridge.approvalDecline(requestId);
         break;
       }
-      upsert(projectName, cwd);
-      if (pendingTimeout != null) window.clearTimeout(pendingTimeout);
       const tool = payload.tool_name ?? "Tool";
       const input = payload.tool_input ?? {};
+      if (payload.provider === "codex" && tool === ASK_TOOL) {
+        if (requestId) void Bridge.approvalDecline(requestId);
+        break;
+      }
+      const questions = tool === ASK_TOOL ? parseQuestions(input) : null;
+      if (tool === ASK_TOOL && !questions) {
+        if (requestId) void Bridge.approvalDecline(requestId);
+        break;
+      }
+      if (pendingTimeout != null) window.clearTimeout(pendingTimeout);
       State.pendingApproval = {
         requestId,
-        sessionId: payload.session_id ?? "",
+        sessionId,
         tool,
-        command: approvalTarget(tool, input),
+        command: questions ? questions[0].question : approvalTarget(tool, input),
+        questions: questions ?? undefined,
       };
+      const view = questions ? "ask" : "approval";
       // The relay's short ack window closes in 800 ms; everything below this
       // line is synchronous, so the card really is up by the time it lands.
       if (requestId) void Bridge.approvalAck(requestId);
-      State.updateTask(CLAUDE_ID, "approval");
+      State.updateTask(id, questions ? "question" : "approval");
       State.isPinned = true;
       Sound.play("approval");
-      if (focused) {
-        island.alert("approval");
+      // Another session holding the view hands it over: a permission request is
+      // the one thing worth switching windows for, and the card names the session.
+      if (focused || isSession(State.focusTask)) {
+        State.focusId = id;
+        island.alert(view);
       } else {
-        // Another agent holds the view, so the card would yank it away. The badge
+        // An integration holds the view, so the card would yank it away. The badge
         // is the signal instead — but it has to be on screen for that to mean
         // anything, hence the reveal. We just told the relay a human can act.
-        State.setPillBadge(CLAUDE_ID, "approval");
+        State.setPillBadge(id, "approval");
         island.reveal();
       }
       // Coucou answers within 108 s or not at all; after that the terminal has
@@ -320,9 +514,9 @@ function handleHook(island: Island, payload: HookPayload) {
         State.pendingApproval = null;
         State.isPinned = false;
         island.dropPin();
-        State.updateTask(CLAUDE_ID, "working");
-        State.setPillBadge(CLAUDE_ID, null);
-        if (State.view === "approval") island.setView(State.defaultView());
+        State.updateTask(id, "working");
+        State.setPillBadge(id, null);
+        if (State.view === "approval" || State.view === "ask") island.setView(State.defaultView());
         State.notify();
       }, 110_000);
       break;

@@ -8,6 +8,7 @@ export type IslandViewName =
   | "overview"
   | "empty"
   | "approval"
+  | "ask"
   | "question"
   | "error"
   | "finished"
@@ -57,6 +58,12 @@ export const PANEL_H = 320;
 export const NOTCH_W = 184;
 export const NOTCH_H = 32;
 export const COMPACT_W = 288; // NOTCH_W + 104
+/** Compact island with nothing to say: just wide enough around Mochi (cx 40, ⌀20). */
+export const COMPACT_IDLE_W = 80;
+/** Compact island while a session is at work: wide enough to say what it's doing. */
+export const COMPACT_STATUS_W = 380;
+/** Extra room for the 5-hour / 7-day usage meters next to the status. */
+export const COMPACT_USAGE_EXTRA = 112;
 export const EXPANDED_W = 640;
 
 export const ROUNDED_CORNER = 14; // hidden / compact
@@ -70,6 +77,8 @@ export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   overview: { height: 160, botX: 68, botY: null, botDiameter: 58, agentMode: "pills" },
   empty: { height: 160, botX: 70, botY: null, botDiameter: 62, agentMode: "none" },
   approval: { height: 160, botX: 62, botY: null, botDiameter: 56, agentMode: "column" },
+  // AskUserQuestion: the question and a row or two of choices need more room.
+  ask: { height: 212, botX: 62, botY: null, botDiameter: 56, agentMode: "column" },
   question: { height: 160, botX: 62, botY: null, botDiameter: 56, agentMode: "column" },
   error: { height: 160, botX: 62, botY: null, botDiameter: 58, agentMode: "column" },
   finished: { height: 160, botX: 62, botY: null, botDiameter: 58, agentMode: "column" },
@@ -101,6 +110,7 @@ export function islandSize(
   mode: IslandMode,
   view: IslandViewName,
   chatCount = 0,
+  compactW = COMPACT_W,
 ): { w: number; h: number } {
   switch (mode) {
     case "hidden":
@@ -108,7 +118,7 @@ export function islandSize(
       // slides into the top edge of the screen instead of sitting there as a bar.
       return { w: NOTCH_W, h: 0 };
     case "compact":
-      return { w: COMPACT_W, h: NOTCH_H };
+      return { w: compactW, h: NOTCH_H };
     case "expanded": {
       const h = view === "prompt" ? chatPromptHeight(chatCount) : VIEW_LAYOUTS[view].height;
       return { w: EXPANDED_W, h };
