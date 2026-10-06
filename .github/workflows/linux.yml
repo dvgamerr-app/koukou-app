@@ -2,8 +2,8 @@ name: Linux
 
 # Builds the Linux app (AppImage, .deb, .rpm) from the same Tauri project as
 # Windows. Triggered by tags like `linux-v0.1.0`, by hand, and by pull requests
-# that touch windows/ or this file (build and test only); the macOS and Windows
-# workflows are untouched.
+# that touch the app or this file (build and test only); the Windows
+# workflow is untouched.
 #
 # Two jobs on purpose. `build` runs npm, cargo and the AppImage tooling (which
 # downloads its own helpers) with a read-only token that is not even kept on
@@ -19,7 +19,7 @@ on:
   # read-only anyway.
   pull_request:
     paths:
-      - 'windows/**'
+      - '**'
       - '.github/workflows/linux.yml'
 
 permissions:
@@ -39,9 +39,6 @@ jobs:
     outputs:
       version: ${{ steps.pack.outputs.version }}
       publish: ${{ steps.gate.outputs.publish }}
-    defaults:
-      run:
-        working-directory: windows
 
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +49,6 @@ jobs:
       # and the GStreamer plugins for the AppImage, which carries its own
       # GStreamer so the sounds play (WAV needs wavparse, in -good).
       - name: Install system libraries
-        working-directory: .
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -64,7 +60,7 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: windows/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -72,8 +68,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            windows/target
-          key: linux-cargo-${{ hashFiles('windows/Cargo.lock') }}
+            target
+          key: linux-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: linux-cargo-
 
       - name: Install dependencies
@@ -127,8 +123,8 @@ jobs:
         with:
           name: Coucou-Linux
           path: |
-            windows/release/Coucou-Linux-*
-            windows/release/SHA256SUMS
+            release/Coucou-Linux-*
+            release/SHA256SUMS
           retention-days: 3
 
   publish:
