@@ -114,3 +114,59 @@ unsafe fn token_sid(process: HANDLE) -> Option<String> {
     let _ = LocalFree(Some(HLOCAL(text.0 as *mut _)));
     sid
 }
+
+/// Our parent, its parent, and so on: bash → claude → the shell → the terminal
+/// or VS Code. The island uses it to find the window this session lives in,
+/// which is why it stops at the first process that has no parent left.
+pub fn ancestor_pids() -> Vec<u32> {
+    use std::collections::HashMap;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+
+    let mut parents = HashMap::<u32, u32>::new();
+    unsafe {
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return Vec::new() };
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
+        if Process32FirstW(snap, &mut entry).is_ok() {
+            loop {
+                parents.insert(entry.th32ProcessID, entry.th32ParentProcessID);
+                if Process32NextW(snap, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snap);
+    }
+
+    let mut chain = Vec::new();
+    let mut pid = std::process::id();
+    // A dozen levels is far more than any real chain; the cap and the cycle
+    // check guard against a recycled PID pointing back down the tree.
+    while chain.len() < 12 {
+        match parents.get(&pid) {
+            Some(&parent) if parent != 0 && !chain.contains(&parent) => {
+                chain.push(parent);
+                pid = parent;
+            }
+            _ => break,
+        }
+    }
+    chain
+}
+
+/// The console window we inherited, when it is a real visible one (a classic
+/// console). Under Windows Terminal or VS Code it is a hidden pseudo window,
+/// useless for finding the session, so it is left out.
+pub fn console_window() -> Option<isize> {
+    use windows::Win32::System::Console::GetConsoleWindow;
+    use windows::Win32::UI::WindowsAndMessaging::IsWindowVisible;
+    unsafe {
+        let hwnd = GetConsoleWindow();
+        (!hwnd.is_invalid() && IsWindowVisible(hwnd).as_bool()).then_some(hwnd.0 as isize)
+    }
+}
