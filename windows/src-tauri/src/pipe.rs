@@ -196,7 +196,11 @@ async fn handle(app: AppHandle, mut pipe: impl Relay) {
         .to_string();
 
     if event != "PermissionRequest" {
-        log::line(format!("hook {event}"));
+        // The status line updates every few seconds per session; logging each one
+        // would only push the useful lines out of the log.
+        if event != "Statusline" {
+            log::line(format!("hook {event}"));
+        }
         let _ = app.emit_to(WINDOW_LABEL, "hook", payload);
         pipe.finish();
         return;
@@ -294,4 +298,13 @@ pub fn answer(app: &AppHandle, request_id: &str, decision: &str) {
     };
     log::line(format!("decision id={request_id} {word}"));
     send(app, request_id, Reply::Decision(word.to_string()), false);
+}
+
+/// Called when an AskUserQuestion is answered on the island: per question, the
+/// indices of the chosen options. Indices only — coucou-hook holds the full,
+/// untruncated questions and is the one that turns them into labels.
+pub fn answer_choices(app: &AppHandle, request_id: &str, choices: &[Vec<usize>]) {
+    let list = serde_json::to_string(choices).unwrap_or_else(|_| "[]".into());
+    log::line(format!("decision id={request_id} answer {list}"));
+    send(app, request_id, Reply::Decision(format!("answer {list}")), false);
 }

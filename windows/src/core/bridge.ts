@@ -54,6 +54,9 @@ export const Bridge = {
 
   /** "Open terminal" → opens the folder in VS Code when `code` is on PATH. */
   openInVSCode: (path: string | null) => call<boolean>("open_in_vscode", { path }),
+  /** Brings forward the window a session runs in; false if it can't be found. */
+  focusSessionWindow: (pids: number[], consoleHwnd: number | null, cwd: string | null) =>
+    call<boolean>("focus_session_window", { pids, consoleHwnd, cwd }),
 
   quit: () => call<void>("quit_app"),
 
@@ -64,6 +67,10 @@ export const Bridge = {
 
   // ── Claude Code hooks ─────────────────────────────────────────────────────
   hooksStatus: () => call<HookStatus>("hooks_status"),
+  codexHooksStatus: () => call<HookStatus>("codex_hooks_status"),
+  codexHooksPreview: (install: boolean) => callOrThrow<HookPreview>("codex_hooks_preview", { install }),
+  codexHooksApply: (install: boolean, fingerprint: string) =>
+    callOrThrow<string>("codex_hooks_apply", { install, fingerprint }),
   /** Diff to show before anything is written. `install: false` previews removal. */
   hooksPreview: (install: boolean) => callOrThrow<HookPreview>("hooks_preview", { install }),
   /**
@@ -75,6 +82,13 @@ export const Bridge = {
 
   approvalDecision: (requestId: string, decision: "allow" | "deny") =>
     call<void>("approval_decision", { requestId, decision }),
+  /**
+   * Answers an AskUserQuestion: for each question, the indices of the chosen
+   * options. Indices, not texts — the relay holds the untruncated questions and
+   * turns them back into the labels Claude Code expects.
+   */
+  approvalAnswer: (requestId: string, choices: number[][]) =>
+    call<void>("approval_answer", { requestId, choices }),
   /** "The card is up" — until this lands the relay only waits a moment. */
   approvalAck: (requestId: string) => call<void>("approval_ack", { requestId }),
   /** "Nobody can act on this" — Claude Code asks in the terminal right away. */
@@ -123,6 +137,8 @@ export interface HookStatus {
   settingsPath: string;
   hookPath: string;
   hookReady: boolean;
+  /** Coucou holds the statusLine slot, so plan usage reaches the island. */
+  usage: boolean;
 }
 
 export interface HookPreview {

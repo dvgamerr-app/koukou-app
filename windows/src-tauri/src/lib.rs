@@ -2,7 +2,9 @@
 
 mod claude;
 mod files;
+mod focus;
 mod hooks;
+mod codex_hooks;
 mod integrations;
 mod island;
 mod log;
@@ -10,6 +12,8 @@ mod pipe;
 mod platform;
 mod secrets;
 mod settings;
+#[cfg(windows)]
+mod shortcuts;
 mod tray;
 
 use std::process::Command;
@@ -61,6 +65,8 @@ fn boot(app: AppHandle, shared: State<Shared>) -> BootInfo {
 
 #[tauri::command]
 fn save_settings(app: AppHandle, shared: State<Shared>, settings: Settings) {
+    #[cfg(windows)]
+    shortcuts::set_enabled(settings.shortcuts_enabled);
     let (screen_changed, autostart_changed) = {
         let mut current = shared.settings.lock().unwrap();
         let screen_changed = current.screen != settings.screen;
@@ -132,6 +138,13 @@ fn open_url(url: String) {
     platform::open_url(&url);
 }
 
+/// "Open terminal" on a finished session: bring forward the window it runs in.
+/// False when no window could be found — the island then opens the folder.
+#[tauri::command]
+fn focus_session_window(pids: Vec<u32>, console_hwnd: Option<i64>, cwd: Option<String>) -> bool {
+    focus::focus_session_window(&pids, console_hwnd.map(|h| h as isize), cwd.as_deref())
+}
+
 /// "Open terminal" opens the working folder in VS Code when `code` is on PATH,
 /// and falls back to the file manager otherwise.
 #[tauri::command]
@@ -184,6 +197,17 @@ fn hooks_status() -> HookStatus {
     hooks::status()
 }
 
+#[tauri::command]
+fn codex_hooks_status() -> HookStatus { codex_hooks::status() }
+
+#[tauri::command]
+fn codex_hooks_preview(install: bool) -> Result<HookPreview, String> { codex_hooks::preview(install) }
+
+#[tauri::command]
+fn codex_hooks_apply(install: bool, fingerprint: String) -> Result<String, String> {
+    codex_hooks::write(install, &fingerprint)
+}
+
 /// Returns the diff the user has to look at before anything is written.
 #[tauri::command]
 fn hooks_preview(install: bool) -> Result<HookPreview, String> {
@@ -214,6 +238,12 @@ fn hooks_apply(
 #[tauri::command]
 fn approval_decision(app: AppHandle, request_id: String, decision: String) {
     pipe::answer(&app, &request_id, &decision);
+}
+
+/// AskUserQuestion answered from the island: chosen option indices per question.
+#[tauri::command]
+fn approval_answer(app: AppHandle, request_id: String, choices: Vec<Vec<usize>>) {
+    pipe::answer_choices(&app, &request_id, &choices);
 }
 
 /// The island has the card on screen, so the long wait for a human may begin.
@@ -383,11 +413,16 @@ pub fn run() {
             reposition,
             open_url,
             open_in_vscode,
+            focus_session_window,
             quit_app,
             hooks_status,
             hooks_preview,
             hooks_apply,
+            codex_hooks_status,
+            codex_hooks_preview,
+            codex_hooks_apply,
             approval_decision,
+            approval_answer,
             approval_ack,
             approval_decline,
             log_line,
@@ -404,6 +439,8 @@ pub fn run() {
         ])
         .setup(move |app| {
             let handle = app.handle().clone();
+            #[cfg(windows)]
+            shortcuts::start(handle.clone(), loaded.shortcuts_enabled);
             tray::build(&handle)?;
             // Before the island: see create_settings_window.
             create_settings_window(&handle);

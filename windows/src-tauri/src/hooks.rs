@@ -36,6 +36,11 @@ pub const HOOK_EVENTS: &[(&str, u64)] = &[
 /// Marker that identifies a Coucou entry inside settings.json.
 const MARKER: &str = "coucou-hook";
 
+/// The statusLine is the only place Claude Code reports plan usage (5-hour and
+/// 7-day windows), so Coucou takes that slot — and runs the user's own status
+/// line behind it, saved aside, so theirs looks exactly the same as before.
+const STATUSLINE_EVENT: &str = "Statusline";
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HookStatus {
@@ -43,6 +48,9 @@ pub struct HookStatus {
     pub settings_path: String,
     pub hook_path: String,
     pub hook_ready: bool,
+    /// Coucou holds the statusLine slot, so plan usage reaches the island.
+    /// False on installs from before usage existed: a reinstall adds it.
+    pub usage: bool,
 }
 
 #[derive(Serialize)]
@@ -79,7 +87,7 @@ fn read_settings() -> Result<Value, String> {
 
 /// The parsing half of `read_settings`, split out so it can be tested without a
 /// home directory.
-fn parse_settings(bytes: &[u8], path: &str) -> Result<Value, String> {
+pub(crate) fn parse_settings(bytes: &[u8], path: &str) -> Result<Value, String> {
     // PowerShell writes a UTF-8 BOM with `Set-Content -Encoding utf8`, and
     // serde_json refuses it. Stripping it is safe and well defined; guessing at
     // anything else is not.
@@ -139,9 +147,37 @@ fn entry_is_ours(entry: &Value) -> bool {
         .unwrap_or(false)
 }
 
+fn statusline_is_ours(v: &Value) -> bool {
+    v.get("command")
+        .and_then(Value::as_str)
+        .map(|c| c.contains(MARKER))
+        .unwrap_or(false)
+}
+
+/// Where the user's own statusLine waits while Coucou holds the slot. The relay
+/// reads it on every status line update (see hook/src/statusline.rs).
+pub fn chain_path() -> PathBuf {
+    settings::local_dir().join("statusline-chain.json")
+}
+
+fn read_chain() -> Option<Value> {
+    serde_json::from_slice(&std::fs::read(chain_path()).ok()?).ok()
+}
+
+/// Coucou's statusLine. The user's padding and refreshInterval are kept, so the
+/// line still looks and refreshes the way they set it up.
+fn our_statusline(current: Option<&Value>) -> Value {
+    let mut line = current.and_then(Value::as_object).cloned().unwrap_or_default();
+    line.insert("type".into(), json!("command"));
+    line.insert("command".into(), json!(hook_command(STATUSLINE_EVENT)));
+    Value::Object(line)
+}
+
 /// Settings with Coucou's hooks added; everything else is left untouched.
 fn merged(existing: &Value) -> Value {
     let mut root = existing.as_object().cloned().unwrap_or_default();
+    let line = our_statusline(root.get("statusLine"));
+    root.insert("statusLine".into(), line);
     let mut hooks = root
         .get("hooks")
         .and_then(Value::as_object)
@@ -170,8 +206,19 @@ fn merged(existing: &Value) -> Value {
 }
 
 /// Settings with every Coucou entry removed, and nothing else changed.
-fn without_ours(existing: &Value) -> Value {
+/// `saved` is the user's own statusLine from before the install, put back.
+fn without_ours(existing: &Value, saved: Option<Value>) -> Value {
     let mut root = existing.as_object().cloned().unwrap_or_default();
+    if root.get("statusLine").map(statusline_is_ours).unwrap_or(false) {
+        match saved {
+            Some(line) => {
+                root.insert("statusLine".into(), line);
+            }
+            None => {
+                root.remove("statusLine");
+            }
+        }
+    }
     let Some(hooks) = root.get("hooks").and_then(Value::as_object).cloned() else {
         return Value::Object(root);
     };
@@ -219,7 +266,7 @@ fn backup_path() -> PathBuf {
 
 /// Identifies the exact bytes a preview was computed from. FNV-1a is plenty:
 /// the question is only "is this still the file I showed the user?".
-fn fingerprint(bytes: &[u8]) -> String {
+pub(crate) fn fingerprint(bytes: &[u8]) -> String {
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
     for b in bytes {
         hash ^= *b as u64;
@@ -251,8 +298,10 @@ pub fn status() -> HookStatus {
         })
         .unwrap_or(false);
     let hook_path = settings::hook_exe_path();
+    let usage = current.get("statusLine").map(statusline_is_ours).unwrap_or(false);
     HookStatus {
         installed,
+        usage,
         settings_path: settings_path().to_string_lossy().to_string(),
         hook_ready: hook_path.exists(),
         hook_path: hook_path.to_string_lossy().to_string(),
@@ -261,7 +310,7 @@ pub fn status() -> HookStatus {
 
 pub fn preview(install: bool) -> Result<HookPreview, String> {
     let current = read_settings()?;
-    let next = if install { merged(&current) } else { without_ours(&current) };
+    let next = if install { merged(&current) } else { without_ours(&current, read_chain()) };
     Ok(HookPreview {
         diff: unified_diff(&pretty(&current), &pretty(&next)),
         backup: backup_path().to_string_lossy().to_string(),
@@ -296,7 +345,24 @@ pub fn write(install: bool, fingerprint: &str) -> Result<String, String> {
         std::fs::copy(&path, &backup).map_err(|e| format!("backup failed: {e}"))?;
     }
 
-    let next = if install { merged(&current) } else { without_ours(&current) };
+    // Save the user's status line before taking its slot. Reinstalling keeps the
+    // copy already saved: by then the slot holds ours, not theirs.
+    if install {
+        match current.get("statusLine") {
+            Some(line) if !statusline_is_ours(line) => {
+                std::fs::create_dir_all(settings::local_dir()).map_err(|e| e.to_string())?;
+                std::fs::write(chain_path(), pretty(line).as_bytes())
+                    .map_err(|e| format!("could not save your statusLine: {e}"))?;
+            }
+            Some(_) => {}
+            // No status line of their own: nothing to chain, and no stale copy.
+            None => {
+                let _ = std::fs::remove_file(chain_path());
+            }
+        }
+    }
+
+    let next = if install { merged(&current) } else { without_ours(&current, read_chain()) };
     let mut text = pretty(&next);
     text.push('\n');
 
@@ -315,6 +381,10 @@ pub fn write(install: bool, fingerprint: &str) -> Result<String, String> {
     if let Err(err) = std::fs::rename(&temp, &path) {
         let _ = std::fs::remove_file(&temp);
         return Err(format!("write failed: {err}"));
+    }
+    if !install {
+        // Their statusLine is back in settings.json; the copy has done its job.
+        let _ = std::fs::remove_file(chain_path());
     }
     Ok(backup.to_string_lossy().to_string())
 }
@@ -432,7 +502,7 @@ fn install_relay(src: &Path, dest: &Path) {
 // ── Minimal unified diff (LCS) ────────────────────────────────────────────────
 
 /// settings.json is short, so a plain O(n·m) LCS is the simplest honest diff.
-fn unified_diff(before: &str, after: &str) -> String {
+pub(crate) fn unified_diff(before: &str, after: &str) -> String {
     let a: Vec<&str> = before.lines().collect();
     let b: Vec<&str> = after.lines().collect();
     let (n, m) = (a.len(), b.len());
@@ -570,8 +640,44 @@ mod tests {
         assert!(after["hooks"]["SomeEventWeDoNotTouch"].is_array());
 
         // And removing ours puts it back exactly as it was.
-        let cleaned = without_ours(&after);
+        let cleaned = without_ours(&after, None);
         assert_eq!(cleaned, existing);
+    }
+
+    #[test]
+    fn the_statusline_slot_is_taken_and_given_back() {
+        let theirs = json!({
+            "type": "command",
+            "command": r#""C:/tools/claude-status.exe" ingest"#,
+            "padding": 1,
+            "refreshInterval": 5
+        });
+        let existing = json!({ "model": "opus", "statusLine": theirs.clone() });
+
+        let after = merged(&existing);
+        let line = &after["statusLine"];
+        assert!(statusline_is_ours(line), "Coucou must hold the slot to see usage");
+        assert!(line["command"].as_str().unwrap().ends_with(" Statusline"));
+        assert_eq!(line["padding"], 1, "their padding is kept");
+        assert_eq!(line["refreshInterval"], 5, "their refresh rate is kept");
+
+        // Reinstalling over ourselves keeps their settings on our line. (Not a
+        // full equality: the exe path follows LOCALAPPDATA, which the filesystem
+        // test below changes for the whole process while this one runs.)
+        let again = merged(&after);
+        assert!(statusline_is_ours(&again["statusLine"]));
+        assert_eq!(again["statusLine"]["padding"], 1);
+        assert_eq!(again["statusLine"]["refreshInterval"], 5);
+
+        // Uninstalling puts theirs back exactly.
+        assert_eq!(without_ours(&after, Some(theirs)), existing);
+
+        // No status line before: none after.
+        let bare = json!({ "model": "opus" });
+        assert_eq!(without_ours(&merged(&bare), None), bare);
+
+        // Someone else's status line is never removed by an uninstall.
+        assert_eq!(without_ours(&existing, None), existing);
     }
 
     #[test]
@@ -629,6 +735,9 @@ mod tests {
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(tmp.join(".claude")).unwrap();
         std::env::set_var(platform::HOME_VAR, &tmp);
+        // The saved statusLine lives under LOCALAPPDATA: keep it off the real one.
+        std::env::set_var("LOCALAPPDATA", &tmp);
+        assert!(chain_path().starts_with(&tmp), "the test must not touch the real app data");
 
         let path = settings_path();
         assert!(path.starts_with(&tmp), "the test must not touch the real home");
@@ -655,6 +764,16 @@ mod tests {
         let pre = after["hooks"]["PreToolUse"].as_array().unwrap();
         assert!(pre.iter().any(|e| serde_json::to_string(e).unwrap().contains("other-tool.exe")));
         assert!(status().installed);
+
+        // Their status line is saved for the relay and comes back on uninstall.
+        std::fs::write(&path, br#"{"statusLine":{"type":"command","command":"mine.exe"}}"#).unwrap();
+        write(true, &preview(true).unwrap().fingerprint).unwrap();
+        let saved: Value = serde_json::from_slice(&std::fs::read(chain_path()).unwrap()).unwrap();
+        assert_eq!(saved["command"], "mine.exe");
+        write(false, &preview(false).unwrap().fingerprint).unwrap();
+        let back: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(back["statusLine"]["command"], "mine.exe");
+        assert!(!chain_path().exists(), "the copy is cleaned up after uninstall");
 
         // A file that moved since the preview is refused, and left alone.
         let stale = preview(false).unwrap();
