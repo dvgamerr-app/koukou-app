@@ -21,7 +21,7 @@ State.loadIntegrationTasks();
 island.applySettings();
 
 const SESSIONS = [
-  { id: "s-coucou", cwd: "E:\\coucou" },
+  { id: "s-koukou", cwd: "E:\\koukou" },
   { id: "s-api", cwd: "E:\\work\\billing-api" },
   { id: "s-web", cwd: "E:\\work\\storefront" },
 ].slice(0, sessionCount);

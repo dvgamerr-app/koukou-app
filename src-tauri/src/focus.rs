@@ -2,7 +2,7 @@
 // the front — the VS Code window or the terminal it was started from, which is
 // necessarily still open, since the session just finished in it.
 //
-// coucou-hook sends the session's process chain (bash → claude → shell → VS Code
+// koukou-hook sends the session's process chain (bash → claude → shell → VS Code
 // or Windows Terminal). The window is the first one owned by a process in that
 // chain; when that process owns several (VS Code: one main process for every
 // window), the title naming the project folder wins.
@@ -195,13 +195,13 @@ mod tests {
         // One VS Code main process owns every VS Code window.
         let windows = [
             win(1, 900, "main.rs - storefront - Visual Studio Code"),
-            win(2, 900, "hooks.ts - coucou - Visual Studio Code"),
+            win(2, 900, "hooks.ts - koukou - Visual Studio Code"),
             win(3, 700, "Windows PowerShell"),
         ];
         // bash(100) → claude(200) → pwsh(300) → Code ptyHost(800) → Code(900)
         let chain = [100, 200, 300, 800, 900];
-        let got = pick(&chain, Some(r"E:\coucou\windows"), &windows).unwrap();
-        assert_eq!(got.0 as isize, 2, "the coucou window, by its folder name");
+        let got = pick(&chain, Some(r"E:\koukou\windows"), &windows).unwrap();
+        assert_eq!(got.0 as isize, 2, "the koukou window, by its folder name");
     }
 
     #[test]
@@ -217,14 +217,14 @@ mod tests {
     #[test]
     fn no_title_match_still_finds_the_host_window() {
         // Windows Terminal: the title is the active tab, not the folder.
-        let windows = [win(5, 600, "✳ Claude Code"), win(6, 999, "coucou - other app")];
-        let got = pick(&[200, 300, 600], Some(r"E:\coucou"), &windows).unwrap();
+        let windows = [win(5, 600, "✳ Claude Code"), win(6, 999, "koukou - other app")];
+        let got = pick(&[200, 300, 600], Some(r"E:\koukou"), &windows).unwrap();
         assert_eq!(got.0 as isize, 5, "a window of the chain beats a title match outside it");
     }
 
     #[test]
     fn nothing_in_the_chain_means_nothing() {
-        let windows = [win(6, 999, "coucou - other app")];
-        assert!(pick(&[200, 300], Some(r"E:\coucou"), &windows).is_none());
+        let windows = [win(6, 999, "koukou - other app")];
+        assert!(pick(&[200, 300], Some(r"E:\koukou"), &windows).is_none());
     }
 }

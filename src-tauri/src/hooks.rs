@@ -3,7 +3,7 @@
 // The rule from CLAUDE.md is strict and is followed to the letter:
 // read %USERPROFILE%\.claude\settings.json, take a dated backup, merge without
 // touching anybody else's hooks, show the diff, and write only after an explicit
-// click. Uninstall removes Coucou's entries and nothing else.
+// click. Uninstall removes Koukou's entries and nothing else.
 //
 // The command is only the quoted exe path in forward slashes plus the event name:
 // on Windows Claude Code runs hook commands through Git Bash, and anything with
@@ -33,11 +33,11 @@ pub const HOOK_EVENTS: &[(&str, u64)] = &[
     ("SubagentStop", 10),
 ];
 
-/// Marker that identifies a Coucou entry inside settings.json.
-const MARKER: &str = "coucou-hook";
+/// Marker that identifies a Koukou entry inside settings.json.
+const MARKER: &str = "koukou-hook";
 
 /// The statusLine is the only place Claude Code reports plan usage (5-hour and
-/// 7-day windows), so Coucou takes that slot — and runs the user's own status
+/// 7-day windows), so Koukou takes that slot — and runs the user's own status
 /// line behind it, saved aside, so theirs looks exactly the same as before.
 const STATUSLINE_EVENT: &str = "Statusline";
 
@@ -48,7 +48,7 @@ pub struct HookStatus {
     pub settings_path: String,
     pub hook_path: String,
     pub hook_ready: bool,
-    /// Coucou holds the statusLine slot, so plan usage reaches the island.
+    /// Koukou holds the statusLine slot, so plan usage reaches the island.
     /// False on installs from before usage existed: a reinstall adds it.
     pub usage: bool,
 }
@@ -97,9 +97,9 @@ pub(crate) fn parse_settings(bytes: &[u8], path: &str) -> Result<Value, String> 
     }
     match serde_json::from_slice::<Value>(text) {
         Ok(v) if v.is_object() => Ok(v),
-        Ok(_) => Err(format!("{path} isn't a JSON object — Coucou won't touch it.")),
+        Ok(_) => Err(format!("{path} isn't a JSON object — Koukou won't touch it.")),
         Err(err) => Err(format!(
-            "{path} isn't valid JSON ({err}). Fix or move it, then try again — Coucou won't overwrite it."
+            "{path} isn't valid JSON ({err}). Fix or move it, then try again — Koukou won't overwrite it."
         )),
     }
 }
@@ -154,7 +154,7 @@ fn statusline_is_ours(v: &Value) -> bool {
         .unwrap_or(false)
 }
 
-/// Where the user's own statusLine waits while Coucou holds the slot. The relay
+/// Where the user's own statusLine waits while Koukou holds the slot. The relay
 /// reads it on every status line update (see hook/src/statusline.rs).
 pub fn chain_path() -> PathBuf {
     settings::local_dir().join("statusline-chain.json")
@@ -164,7 +164,7 @@ fn read_chain() -> Option<Value> {
     serde_json::from_slice(&std::fs::read(chain_path()).ok()?).ok()
 }
 
-/// Coucou's statusLine. The user's padding and refreshInterval are kept, so the
+/// Koukou's statusLine. The user's padding and refreshInterval are kept, so the
 /// line still looks and refreshes the way they set it up.
 fn our_statusline(current: Option<&Value>) -> Value {
     let mut line = current.and_then(Value::as_object).cloned().unwrap_or_default();
@@ -173,7 +173,7 @@ fn our_statusline(current: Option<&Value>) -> Value {
     Value::Object(line)
 }
 
-/// Settings with Coucou's hooks added; everything else is left untouched.
+/// Settings with Koukou's hooks added; everything else is left untouched.
 fn merged(existing: &Value) -> Value {
     let mut root = existing.as_object().cloned().unwrap_or_default();
     let line = our_statusline(root.get("statusLine"));
@@ -205,7 +205,7 @@ fn merged(existing: &Value) -> Value {
     Value::Object(root)
 }
 
-/// Settings with every Coucou entry removed, and nothing else changed.
+/// Settings with every Koukou entry removed, and nothing else changed.
 /// `saved` is the user's own statusLine from before the install, put back.
 fn without_ours(existing: &Value, saved: Option<Value>) -> Value {
     let mut root = existing.as_object().cloned().unwrap_or_default();
@@ -373,7 +373,7 @@ pub fn write(install: bool, fingerprint: &str) -> Result<String, String> {
 
     // Write beside the target and rename over it: a crash or a full disk leaves
     // the original settings.json intact rather than half a file.
-    let temp = path.with_extension(format!("json.coucou-{}", std::process::id()));
+    let temp = path.with_extension(format!("json.koukou-{}", std::process::id()));
     if let Err(err) = write_like(&temp, &path, text.as_bytes()) {
         let _ = std::fs::remove_file(&temp);
         return Err(format!("write failed: {err}"));
@@ -415,7 +415,7 @@ fn write_like(temp: &Path, original: &Path, bytes: &[u8]) -> std::io::Result<()>
     Ok(())
 }
 
-/// Copies the relay (coucou-hook.exe / coucou-hook) into the local data dir's
+/// Copies the relay (koukou-hook.exe / koukou-hook) into the local data dir's
 /// bin/ on launch. In a bundled install it comes from the app resources; in
 /// `tauri dev` it sits next to the app binary in the workspace target directory.
 ///
@@ -593,7 +593,7 @@ mod tests {
     #[test]
     fn unreadable_content_is_an_error_never_an_empty_object() {
         // This is the whole bug: returning {} here meant `merged()` produced a
-        // file containing nothing but Coucou's hooks, and the write replaced
+        // file containing nothing but Koukou's hooks, and the write replaced
         // everything the user had.
         for bad in [&b"{ not json"[..], &b"[1,2,3]"[..], &b"\"a string\""[..]] {
             assert!(
@@ -656,7 +656,7 @@ mod tests {
 
         let after = merged(&existing);
         let line = &after["statusLine"];
-        assert!(statusline_is_ours(line), "Coucou must hold the slot to see usage");
+        assert!(statusline_is_ours(line), "Koukou must hold the slot to see usage");
         assert!(line["command"].as_str().unwrap().ends_with(" Statusline"));
         assert_eq!(line["padding"], 1, "their padding is kept");
         assert_eq!(line["refreshInterval"], 5, "their refresh rate is kept");
@@ -703,7 +703,7 @@ mod tests {
     #[test]
     fn rewriting_settings_never_widens_its_permissions() {
         use std::os::unix::fs::PermissionsExt;
-        let dir = std::env::temp_dir().join(format!("coucou-perm-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("koukou-perm-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let original = dir.join("settings.json");
@@ -731,7 +731,7 @@ mod tests {
     /// the home directory at a temp directory, and that is process-wide.
     #[test]
     fn writing_backs_up_preserves_and_refuses_a_changed_file() {
-        let tmp = std::env::temp_dir().join(format!("coucou-hooks-{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("koukou-hooks-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(tmp.join(".claude")).unwrap();
         std::env::set_var(platform::HOME_VAR, &tmp);
@@ -750,7 +750,7 @@ mod tests {
 
         // Install.
         let plan = preview(true).expect("a BOM must not stop the preview");
-        assert!(plan.diff.contains("coucou-hook"), "the diff must show what changes");
+        assert!(plan.diff.contains("koukou-hook"), "the diff must show what changes");
         let backup = write(true, &plan.fingerprint).expect("install should succeed");
 
         // The backup holds the original bytes, BOM and all.

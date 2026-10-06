@@ -26,7 +26,7 @@ permissions:
   contents: read
 
 # Off until a first build has been checked by hand: run this workflow manually,
-# download the Coucou-Linux artifact, try it, then set this to 'true' and push a
+# download the Koukou-Linux artifact, try it, then set this to 'true' and push a
 # linux-v* tag.
 env:
   PUBLISH: 'false'
@@ -90,11 +90,11 @@ jobs:
           [ "$tag" = "$cargo" ] || bad="$bad Cargo.toml says $cargo;"
           if [ -n "$bad" ]; then echo "tag says $tag but$bad"; exit 1; fi
 
-      # The app bundles target/release/coucou-hook as a resource, and its build
+      # The app bundles target/release/koukou-hook as a resource, and its build
       # script refuses to run until that file exists.
       - name: Test
         run: |
-          cargo build --release -p coucou-hook
+          cargo build --release -p koukou-hook
           cargo test --workspace
 
       # linuxdeploy is itself an AppImage; runners have no FUSE, so it unpacks
@@ -107,7 +107,7 @@ jobs:
           npm run pack
           echo "version=$(node -p "require('./src-tauri/tauri.conf.json').version")" >> "$GITHUB_OUTPUT"
           cd release
-          sha256sum Coucou-Linux-* > SHA256SUMS
+          sha256sum Koukou-Linux-* > SHA256SUMS
           ls -la
           cat SHA256SUMS
 
@@ -121,9 +121,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'workflow_dispatch' || steps.gate.outputs.publish == 'true'
         with:
-          name: Coucou-Linux
+          name: Koukou-Linux
           path: |
-            release/Coucou-Linux-*
+            release/Koukou-Linux-*
             release/SHA256SUMS
           retention-days: 3
 
@@ -142,7 +142,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: Coucou-Linux
+          name: Koukou-Linux
           path: release
 
       - name: Publish the release
@@ -151,11 +151,11 @@ jobs:
           VERSION: ${{ needs.build.outputs.version }}
         run: |
           v="$VERSION"
-          notes="Coucou for Linux $v — Mochi at the top of your screen.
+          notes="Koukou for Linux $v — Mochi at the top of your screen.
 
-          - **AppImage** (any distribution): \`chmod +x Coucou-Linux-$v-x86_64.AppImage\` and run it.
-          - **Debian / Ubuntu**: \`sudo apt install ./Coucou-Linux-$v-amd64.deb\`
-          - **Fedora / openSUSE**: \`sudo dnf install ./Coucou-Linux-$v-x86_64.rpm\`
+          - **AppImage** (any distribution): \`chmod +x Koukou-Linux-$v-x86_64.AppImage\` and run it.
+          - **Debian / Ubuntu**: \`sudo apt install ./Koukou-Linux-$v-amd64.deb\`
+          - **Fedora / openSUSE**: \`sudo dnf install ./Koukou-Linux-$v-x86_64.rpm\`
 
           Check a download with \`sha256sum -c SHA256SUMS --ignore-missing\`.
 
@@ -164,11 +164,11 @@ jobs:
           # --latest=false: the macOS \`v*\` releases own the Latest slot, which
           # the site's Download for Mac button points at.
           gh release create "$GITHUB_REF_NAME" \
-            "release/Coucou-Linux-$v-x86_64.AppImage" \
-            "release/Coucou-Linux-$v-amd64.deb" \
-            "release/Coucou-Linux-$v-x86_64.rpm" \
+            "release/Koukou-Linux-$v-x86_64.AppImage" \
+            "release/Koukou-Linux-$v-amd64.deb" \
+            "release/Koukou-Linux-$v-x86_64.rpm" \
             "release/SHA256SUMS" \
-            --title "Coucou for Linux $v" \
+            --title "Koukou for Linux $v" \
             --notes "$notes" \
             --latest=false
 
@@ -182,12 +182,12 @@ jobs:
             # The tag has to follow the release, as for windows-latest.
             git tag -f linux-latest "$GITHUB_SHA"
             git push -f origin linux-latest
-            gh release edit linux-latest --title "Coucou for Linux (latest)" --notes "Always the newest Linux build — currently $v."
-            gh release upload linux-latest "release/Coucou-Linux-x86_64.AppImage" --clobber
+            gh release edit linux-latest --title "Koukou for Linux (latest)" --notes "Always the newest Linux build — currently $v."
+            gh release upload linux-latest "release/Koukou-Linux-x86_64.AppImage" --clobber
           else
             gh release create linux-latest \
-              "release/Coucou-Linux-x86_64.AppImage" \
-              --title "Coucou for Linux (latest)" \
+              "release/Koukou-Linux-x86_64.AppImage" \
+              --title "Koukou for Linux (latest)" \
               --notes "Always the newest Linux build — currently $v." \
               --latest=false
           fi

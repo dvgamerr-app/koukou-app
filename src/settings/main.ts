@@ -69,9 +69,9 @@ function hooksSection(status: HookStatus, codex = false): HTMLElement {
       h("div", {
         class: "hint",
         text: codex
-          ? `${status.installed ? "Coucou's Codex hooks are installed." : "Install hooks to connect Codex sessions to the island."} See tool activity, completion and permission requests. After installing, review and trust the hooks in Codex (/hooks in the CLI).`
+          ? `${status.installed ? "Koukou's Codex hooks are installed." : "Install hooks to connect Codex sessions to the island."} See tool activity, completion and permission requests. After installing, review and trust the hooks in Codex (/hooks in the CLI).`
           : status.installed
-          ? "Coucou is hooked into your Claude Code sessions. Tool calls, questions and permission requests show up in the island, and you can answer them there."
+          ? "Koukou is hooked into your Claude Code sessions. Tool calls, questions and permission requests show up in the island, and you can answer them there."
           : "Install the hooks to see your Claude Code sessions in the island and approve permissions without leaving what you are doing.",
       }),
       h("div", { class: "row" },
@@ -88,14 +88,14 @@ function hooksSection(status: HookStatus, codex = false): HTMLElement {
     if (!codex && status.installed && !status.usage) {
       body.append(h("div", {
         class: "notice warn",
-        text: "Plan usage (5-hour and weekly) isn't connected yet. Reinstall the hooks: Coucou takes the statusLine slot and keeps running your own status line behind it.",
+        text: "Plan usage (5-hour and weekly) isn't connected yet. Reinstall the hooks: Koukou takes the statusLine slot and keeps running your own status line behind it.",
       }));
     }
 
     if (!status.hookReady) {
       body.append(h("div", {
         class: "notice warn",
-        text: "coucou-hook.exe is not in place yet. Restart Coucou; if it still fails, build it with `cargo build -p coucou-hook`.",
+        text: "koukou-hook.exe is not in place yet. Restart Koukou; if it still fails, build it with `cargo build -p koukou-hook`.",
       }));
     }
 
@@ -145,10 +145,10 @@ function hooksSection(status: HookStatus, codex = false): HTMLElement {
       h("div", {
         class: "hint",
         text: codex
-          ? `This shows exactly what will change in ${filename}. ${install ? "Adds Codex session, tool, completion and approval hooks." : "Removes Coucou's Codex hooks."} Your own hooks are preserved. A backup is saved before writing.`
+          ? `This shows exactly what will change in ${filename}. ${install ? "Adds Codex session, tool, completion and approval hooks." : "Removes Koukou's Codex hooks."} Your own hooks are preserved. A backup is saved before writing.`
           : install
-          ? "This is exactly what will change in your settings.json. Your own hooks are left untouched. If you have a status line, Coucou runs it behind its own, so it looks the same, and puts it back when you uninstall."
-          : "This removes Coucou's entries only, and puts your own status line back. Your own hooks are left untouched.",
+          ? "This is exactly what will change in your settings.json. Your own hooks are left untouched. If you have a status line, Koukou runs it behind its own, so it looks the same, and puts it back when you uninstall."
+          : "This removes Koukou's entries only, and puts your own status line back. Your own hooks are left untouched.",
       }),
       renderDiff(preview.diff),
       h("div", { class: "row" },
@@ -169,7 +169,7 @@ function hooksSection(status: HookStatus, codex = false): HTMLElement {
         body.append(h("div", {
           class: "notice ok",
           text: codex
-            ? `Done. Backup: ${backup}. ${install ? "Open a new Codex session and review/trust the hooks (/hooks in the CLI)." : "Coucou's Codex hooks were removed."}`
+            ? `Done. Backup: ${backup}. ${install ? "Open a new Codex session and review/trust the hooks (/hooks in the CLI)." : "Koukou's Codex hooks were removed."}`
             : `Done. Previous settings saved as ${backup}. Open a new Claude Code session to pick the hooks up.`,
         }));
         window.setTimeout(() => void rebuild(), 2600);
@@ -476,7 +476,7 @@ async function main() {
 
   clear(root);
   root.append(
-    h("h1", {}, h("span", { text: "Coucou" }), h("span", { class: "version", text: version })),
+    h("h1", {}, h("span", { text: "Koukou" }), h("span", { class: "version", text: version })),
     hooksSection(status),
     hooksSection(codexStatus, true),
     apiSection(hasKey),

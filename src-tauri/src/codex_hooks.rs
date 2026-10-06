@@ -46,7 +46,7 @@ fn ours(handler: &Value) -> bool {
         handler
             .get(*key)
             .and_then(Value::as_str)
-            .map(|s| s.contains("coucou-hook") && s.contains("--codex"))
+            .map(|s| s.contains("koukou-hook") && s.contains("--codex"))
             .unwrap_or(false)
     })
 }
@@ -60,7 +60,7 @@ fn changed(current: &Value, install: bool) -> Result<Value, String> {
     let all = root
         .get_mut("hooks")
         .and_then(Value::as_object_mut)
-        .ok_or("hooks must be an object; Coucou won't overwrite it")?;
+        .ok_or("hooks must be an object; Koukou won't overwrite it")?;
     let mut empty_events = Vec::new();
     for (event, groups) in all.iter_mut() {
         let groups = groups
@@ -169,7 +169,7 @@ pub fn preview(install: bool) -> Result<HookPreview, String> {
 
 pub fn write(install: bool, fingerprint: &str) -> Result<String, String> {
     if install && !settings::hook_exe_path().exists() {
-        return Err("coucou-hook.exe isn't installed yet".into());
+        return Err("koukou-hook.exe isn't installed yet".into());
     }
     let (current, actual) = read()?;
     if actual != fingerprint {
@@ -183,7 +183,7 @@ pub fn write(install: bool, fingerprint: &str) -> Result<String, String> {
     if p.exists() {
         std::fs::copy(&p, &backup).map_err(|e| format!("Backup failed: {e}"))?;
     }
-    let temp = p.with_extension(format!("json.coucou-{}", std::process::id()));
+    let temp = p.with_extension(format!("json.koukou-{}", std::process::id()));
     std::fs::write(&temp, format!("{}\n", pretty(&next))).map_err(|e| e.to_string())?;
     if let Err(e) = std::fs::rename(&temp, &p) {
         let _ = std::fs::remove_file(&temp);

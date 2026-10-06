@@ -3,7 +3,7 @@
   "configVersion": 0,
   "workspaces": {
     "": {
-      "name": "coucou-windows",
+      "name": "koukou-windows",
       "dependencies": {
         "@tauri-apps/api": "^2",
         "lucide": "^1.51.0",

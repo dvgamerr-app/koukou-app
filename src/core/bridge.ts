@@ -15,7 +15,7 @@ async function call<T>(cmd: string, args?: Record<string, unknown>): Promise<T |
   try {
     return await invoke<T>(cmd, args);
   } catch (err) {
-    console.error(`[coucou] ${cmd} failed`, err);
+    console.error(`[koukou] ${cmd} failed`, err);
     return null;
   }
 }
@@ -62,7 +62,7 @@ export const Bridge = {
 
   openSettingsWindow: () => call<void>("open_settings_window"),
 
-  /** Writes to %LOCALAPPDATA%\Coucou\coucou.log, next to the Rust lines. */
+  /** Writes to %LOCALAPPDATA%\Koukou\koukou.log, next to the Rust lines. */
   log: (message: string) => call<void>("log_line", { message }),
 
   // ── Claude Code hooks ─────────────────────────────────────────────────────
@@ -137,7 +137,7 @@ export interface HookStatus {
   settingsPath: string;
   hookPath: string;
   hookReady: boolean;
-  /** Coucou holds the statusLine slot, so plan usage reaches the island. */
+  /** Koukou holds the statusLine slot, so plan usage reaches the island. */
   usage: boolean;
 }
 
@@ -151,7 +151,7 @@ export interface HookPreview {
 
 /** Same as `call`, but surfaces the error so the UI can show what went wrong. */
 async function callOrThrow<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (!IS_TAURI) throw new Error("not running inside Coucou");
+  if (!IS_TAURI) throw new Error("not running inside Koukou");
   return invoke<T>(cmd, args);
 }
 

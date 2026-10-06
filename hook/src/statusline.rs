@@ -1,16 +1,16 @@
-//! `coucou-hook Statusline` — Coucou's statusLine command.
+//! `koukou-hook Statusline` — Koukou's statusLine command.
 //!
 //! The statusLine JSON is the only place Claude Code reports plan usage (the
-//! 5-hour and 7-day windows), so Coucou has to sit in that slot. But there is
+//! 5-hour and 7-day windows), so Koukou has to sit in that slot. But there is
 //! only one slot, and the user may already have a status line of their own.
 //! So this does two things at once:
 //!
-//! * forwards the session id and `rate_limits` to Coucou, fire-and-forget, and
+//! * forwards the session id and `rate_limits` to Koukou, fire-and-forget, and
 //! * runs the user's original statusLine command with the same stdin and prints
 //!   whatever it prints — their status line looks exactly as before.
 //!
 //! The original command is saved by the installer in
-//! `%LOCALAPPDATA%\Coucou\statusline-chain.json`. No file, no chained command:
+//! `%LOCALAPPDATA%\Koukou\statusline-chain.json`. No file, no chained command:
 //! we print nothing, which is what having no status line looks like.
 
 use std::io::{Read, Write};
@@ -22,13 +22,13 @@ use std::time::Duration;
 /// A status line that takes longer than this is not worth waiting for; Claude
 /// Code would cancel us on the next update anyway.
 const CHAIN_BUDGET: Duration = Duration::from_secs(8);
-/// How long we let the forward to Coucou finish once the line is printed.
+/// How long we let the forward to Koukou finish once the line is printed.
 const FORWARD_GRACE: Duration = Duration::from_millis(400);
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub fn chain_path() -> Option<PathBuf> {
     let base = std::env::var_os("LOCALAPPDATA")?;
-    Some(Path::new(&base).join("Coucou").join("statusline-chain.json"))
+    Some(Path::new(&base).join("Koukou").join("statusline-chain.json"))
 }
 
 pub fn run() {
@@ -38,7 +38,7 @@ pub fn run() {
         raw.drain(..3);
     }
 
-    // Forward first, in the background: Coucou being slow or closed must never
+    // Forward first, in the background: Koukou being slow or closed must never
     // hold up the user's own status line.
     let (tx, rx) = mpsc::channel::<()>();
     if let Some(line) = forward_payload(&raw) {
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn forwards_only_what_the_island_needs() {
-        let raw = br#"{"session_id":"s1","cwd":"E:/coucou","model":{"id":"x"},
+        let raw = br#"{"session_id":"s1","cwd":"E:/koukou","model":{"id":"x"},
             "rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":1738425600}}}"#;
         let line = forward_payload(raw).unwrap();
         let v: serde_json::Value = serde_json::from_str(line.trim()).unwrap();

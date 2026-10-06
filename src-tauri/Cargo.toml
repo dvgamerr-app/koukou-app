@@ -1,13 +1,13 @@
 [package]
-name = "coucou"
-description = "Coucou for Windows and Linux — Mochi lives at the top of your screen"
+name = "koukou"
+description = "Koukou for Windows and Linux — Mochi lives at the top of your screen"
 authors = ["Louis Raille"]
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [lib]
-name = "coucou_lib"
+name = "koukou_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
@@ -20,11 +20,11 @@ tauri-plugin-autostart = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["net", "io-util", "sync", "time", "rt"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
 
 [target.'cfg(windows)'.dependencies]
-keyring = { version = "3", features = ["windows-native"] }
-windows = { version = "0.61", features = [
+keyring = "4"
+windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_Security",
   "Win32_Security_Authorization",
@@ -38,7 +38,7 @@ windows = { version = "0.61", features = [
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Secret Service (GNOME Keyring, KWallet) over D-Bus, encrypted in transit.
-keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+keyring = "4"
 libc = "0.2"
 # The GTK that Tauri already runs on, to reach its window for layer-shell and
 # the input region. libgtk-layer-shell itself is called directly (platform/linux.rs).

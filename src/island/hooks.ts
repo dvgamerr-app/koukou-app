@@ -24,7 +24,7 @@ export interface HookPayload {
   tool_name?: string;
   tool_input?: Record<string, unknown>;
   /** Optional agent tag: lowercase, digits and hyphens, ≤ 24 chars. */
-  coucou_agent?: string;
+  koukou_agent?: string;
   /** Statusline only: `five_hour` / `seven_day` plan usage windows. */
   rate_limits?: unknown;
   /** Added by the relay: the session's process chain, nearest first. */
@@ -293,9 +293,9 @@ export function handleHook(island: Island, payload: HookPayload) {
     return;
   }
 
-  // Route to the right pill. Valid coucou_agent → dynamic "agent_<name>" pill.
+  // Route to the right pill. Valid koukou_agent → dynamic "agent_<name>" pill.
   // "claude" is reserved; absent or invalid → the session's own pill.
-  const validAgent = validateAgent(payload.coucou_agent);
+  const validAgent = validateAgent(payload.koukou_agent);
   const isExternalAgent = validAgent !== null;
 
   if (name === "SessionEnd") {
@@ -506,7 +506,7 @@ export function handleHook(island: Island, payload: HookPayload) {
         State.setPillBadge(id, "approval");
         island.reveal();
       }
-      // Coucou answers within 108 s or not at all; after that the terminal has
+      // Koukou answers within 108 s or not at all; after that the terminal has
       // taken over and the card would be lying.
       pendingTimeout = window.setTimeout(() => {
         pendingTimeout = null;
