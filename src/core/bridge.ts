@@ -62,6 +62,11 @@ export const Bridge = {
 
   openSettingsWindow: () => call<void>("open_settings_window"),
 
+  /** Hovered limits are still n/a: look for them (Codex's log, Claude's account). */
+  refreshUsage: () => call<void>("refresh_usage"),
+  usageCacheLoad: () => call<unknown>("usage_cache_load"),
+  usageCacheSave: (value: unknown) => call<void>("usage_cache_save", { value }),
+
   /** Writes to %LOCALAPPDATA%\Koukou\koukou.log, next to the Rust lines. */
   log: (message: string) => call<void>("log_line", { message }),
 

@@ -1,10 +1,12 @@
 // Koukou for Windows — app wiring and the commands the island calls.
 
 mod claude;
+mod claude_usage;
 mod files;
 mod focus;
 mod hooks;
 mod codex_hooks;
+mod codex_usage;
 mod integrations;
 mod island;
 mod log;
@@ -352,8 +354,8 @@ fn create_settings_window(app: &AppHandle) {
     match WebviewWindowBuilder::new(app, "settings", url)
         .additional_browser_args(BROWSER_ARGS)
         .title("Settings — Koukou")
-        .inner_size(560.0, 680.0)
-        .min_inner_size(460.0, 480.0)
+        .inner_size(880.0, 640.0)
+        .min_inner_size(680.0, 480.0)
         .resizable(true)
         .visible(false)
         .center()
@@ -383,6 +385,24 @@ pub fn show_settings_window(app: &AppHandle) {
     let _ = win.set_focus();
 }
 
+/// The island hovered limits that are still n/a: look for them. Codex's come
+/// from its session log, Claude's from the account (see claude_usage.rs).
+#[tauri::command]
+fn refresh_usage(app: AppHandle) {
+    codex_usage::refresh(app.clone());
+    claude_usage::refresh(app);
+}
+
+#[tauri::command]
+fn usage_cache_load() -> serde_json::Value {
+    claude_usage::cache_load()
+}
+
+#[tauri::command]
+fn usage_cache_save(value: serde_json::Value) {
+    claude_usage::cache_save(&value);
+}
+
 #[tauri::command]
 fn open_settings_window(app: AppHandle) {
     show_settings_window(&app);
@@ -406,6 +426,9 @@ pub fn run() {
         .manage(Chat::default())
         .invoke_handler(tauri::generate_handler![
             boot,
+            refresh_usage,
+            usage_cache_load,
+            usage_cache_save,
             save_settings,
             set_collapsed,
             set_island_rect,
@@ -463,6 +486,7 @@ pub fn run() {
             hooks::ensure_hook_exe(&handle);
             pipe::start(handle.clone());
             integrations::start(handle.clone());
+            codex_usage::start(handle.clone());
             Ok(())
         })
         .run(tauri::generate_context!())

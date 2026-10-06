@@ -4,7 +4,7 @@
 import { Tracked, Spring, clamp } from "../core/anim";
 import { Bridge, IS_TAURI, onDragDrop } from "../core/bridge";
 import {
-  COMPACT_IDLE_W, COMPACT_STATUS_W, COMPACT_USAGE_EXTRA, COMPACT_W,
+  COMPACT_IDLE_W, COMPACT_MINI_W, COMPACT_STATUS_W, COMPACT_W,
   EXPANDED_CORNER, EXPANDED_W, NOTCH_W, PANEL_H, PANEL_W,
   ROUNDED_CORNER, VIEW_LAYOUTS, botGlowColor, botGlowOpacity, botPosition, chatPromptHeight,
   islandSize,
@@ -19,7 +19,8 @@ import { syncMiniBotStates, tickMiniBots } from "../mochi/minibots";
 import { UploadCanvas } from "../upload/canvas";
 import { USC, UploadSeq } from "../upload/sequence";
 import { buildHeader, buildViews, type ViewActions, type ViewHost } from "../views/views";
-import { h, dot } from "../views/dom";
+import { h, dot, svg } from "../views/dom";
+import { ICONS } from "../views/icons";
 import { isActive, isBusy, statusColor, statusText } from "../views/status";
 import { IslandStateMachine } from "./fsm";
 
@@ -196,12 +197,22 @@ export class Island {
       setAutoClose: (s) => {
         State.settings.autoCloseInterval = s;
         this.fsm.homeToPetitDelay = s;
+        this.fsm.setAutoHide(s > 0);
         void Bridge.saveSettings(State.settings);
         State.notify();
       },
-      openSettingsWindow: () => void Bridge.openSettingsWindow(),
+      // The panel lives in its own window; the island goes back to compact.
+      openSettingsWindow: () => {
+        void Bridge.openSettingsWindow();
+        this.collapse();
+      },
       blip: () => Sound.play("blip"),
     };
+
+    // The mini bar shows the machine clock: redraw it as the minute turns.
+    window.setInterval(() => {
+      if (State.mode === "compact" && State.settings.autoCloseInterval <= 0) State.notify();
+    }, 10_000);
 
     this.wakeStrip = h("div", { id: "wake-strip" });
     this.botGlow = h("div", { id: "bot-glow" });
@@ -692,6 +703,7 @@ export class Island {
       if (this.fsm.state === "koukou") this.greeting.hover();
       this.fsm.mouseEntered();
       this.homeCollapseAt = null;
+      this.lookUpMissingUsage();
     }
     if (!inIsland && this.wasInIsland) {
       this.fsm.mouseLeft();
@@ -1027,41 +1039,68 @@ export class Island {
   }
 
   /**
-   * Compact island: which session and what it is doing, next to Mochi, and —
-   * while the pointer is over the bar — the plan usage, 5-hour and 7-day.
+   * Compact island, three looks on one fixed width (hovering never widens it):
+   * - status: which session and what it is doing, while a session is at work;
+   * - limits: under the pointer, the status text gives way to the Claude and
+   *   Codex plan limits (5-hour and weekly) side by side;
+   * - mini: with auto-hide off and nothing running, the weekly limits stay up.
    */
   private syncCompactStatus() {
     const task = this.pickCompactTask();
     this.compactSessionId = task?.id ?? null;
 
     const nowS = Date.now() / 1000;
-    const windows: [string, UsageWindow][] = [];
-    if (isLive(State.usage.fiveHour, nowS)) windows.push(["5h", State.usage.fiveHour]);
-    if (isLive(State.usage.sevenDay, nowS)) windows.push(["7d", State.usage.sevenDay]);
-    // Usage is something you look up, not something to keep in view: hover only.
-    const hasUsage = windows.length > 0 && this.wasInIsland;
+    const providers = [
+      { name: "Claude", icon: ICONS.claude, color: "#E08A66", usage: State.usage },
+      { name: "Codex", icon: ICONS.codex, color: "#7DB4FF", usage: State.codexUsage },
+    ]
+      .map((p) => {
+        // A window that isn't known (no hook yet, or it has reset) shows as n/a.
+        const windows: [string, UsageWindow | null][] = [
+          ["5h", isLive(p.usage.fiveHour, nowS) ? p.usage.fiveHour : null],
+          ["7d", isLive(p.usage.sevenDay, nowS) ? p.usage.sevenDay : null],
+        ];
+        return { ...p, windows };
+      });
 
-    // Usage alone fits the plain compact width; the status needs room of its own.
-    // Idle with nothing to show: shrink to just Mochi.
-    const w = task
-      ? COMPACT_STATUS_W + (hasUsage ? COMPACT_USAGE_EXTRA : 0)
-      : hasUsage
-        ? COMPACT_W
-        : COMPACT_IDLE_W;
+    // Auto-close off and nothing running: a mini bar with the clock; hovering it
+    // shows the weekly limits. Limits come from what the hooks last reported.
+    const miniIdle = !task && State.settings.autoCloseInterval <= 0;
+    const mode: "status" | "limits" | "mini" | "none" =
+      this.wasInIsland ? "limits"
+      : task ? "status"
+      : miniIdle ? "mini"
+      : "none";
+
+    const w =
+      mode === "none" ? COMPACT_IDLE_W
+      : mode === "mini" ? COMPACT_MINI_W
+      : miniIdle ? COMPACT_MINI_W
+      : COMPACT_STATUS_W;
     if (w !== this.compactW) {
       const grew = w > this.compactW;
       this.compactW = w;
       if (State.mode === "compact") this.animateGeometry(!grew);
     }
 
-    const show = State.mode === "compact" && (task != null || hasUsage);
+    const show = State.mode === "compact" && mode !== "none";
     this.compactStatus.style.display = show ? "flex" : "none";
     if (!show) return;
 
-
-    this.compactName.style.display = task ? "" : "none";
-    this.compactText.style.display = task ? "" : "none";
-    if (task) {
+    // A running session keeps its name and status on hover; the limits take the right edge.
+    const showTask = (mode === "status" || mode === "limits") && task != null;
+    this.compactStatus.classList.toggle("with-task", showTask);
+    const showClock = mode === "mini";
+    this.compactStatus.classList.toggle("clock", showClock);
+    this.compactName.style.display = showTask ? "" : "none";
+    this.compactText.style.display = showTask || showClock ? "" : "none";
+    if (showClock) {
+      const time = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+      if (this.compactText.textContent !== time) this.compactText.textContent = time;
+      this.compactText.classList.remove("shimmer");
+      this.compactText.style.color = "";
+    }
+    if (showTask && task) {
       this.compactName.replaceChildren(dot(task.color, 6), task.name);
       const text = statusText(task);
       if (this.compactText.textContent !== text) this.compactText.textContent = text;
@@ -1069,24 +1108,46 @@ export class Island {
       this.compactText.style.color = statusColor(task) ?? "";
     }
 
-    const key = windows.map(([label, u]) => `${label}:${Math.round(u.pct)}`).join("|");
+    // Only the weekly window is shown, in every state; the 5-hour one is dropped.
+    const weeklyOnly = true;
+    const key = `${mode}|${weeklyOnly}|` + providers
+      .map((p) => `${p.name}:` + p.windows.map(([l, u]) => `${l}${u ? Math.round(u.pct) : "-"}`).join(","))
+      .join("|");
     if (this.compactUsage.dataset.key !== key) {
       this.compactUsage.dataset.key = key;
       this.compactUsage.replaceChildren(
-        ...windows.map(([label, u]) => {
-          const pct = Math.min(100, Math.round(u.pct));
-          const fill = h("s");
-          fill.style.width = `${pct}%`;
-          fill.style.background = usageColor(u.pct);
-          return h("span", { class: "u" },
-            h("i", { text: label }),
-            h("b", {}, fill),
-            h("em", { text: `${pct}%` }),
-          );
+        // Weekly only: say so once, instead of "7d" next to each provider.
+        ...(weeklyOnly ? [h("span", { class: "wk", text: "7d" })] : []),
+        ...providers.map((p) => {
+          const wins = weeklyOnly ? p.windows.filter(([l]) => l === "7d") : p.windows;
+          const tag = h("strong", { title: p.name }, svg(p.icon, 13));
+          tag.style.color = p.color;
+          return h("span", { class: "prov" }, tag, ...wins.map(([label, u]) => {
+            const pct = u ? Math.min(100, Math.round(u.pct)) : 0;
+            const fill = h("s");
+            fill.style.width = `${pct}%`;
+            if (u) fill.style.background = usageColor(u.pct);
+            return h("span", { class: u ? "u" : "u na" },
+              weeklyOnly ? null : h("i", { text: label }),
+              h("b", {}, fill),
+              h("em", { text: u ? `${pct}%` : "n/a" }),
+            );
+          }));
         }),
       );
     }
-    this.compactUsage.style.display = hasUsage ? "" : "none";
+    this.compactUsage.classList.toggle("weekly", weeklyOnly);
+    this.compactUsage.style.display = mode === "limits" ? "" : "none";
+  }
+
+  /**
+   * Hover found a limit it doesn't know (n/a): ask the backend to look. Known
+   * values are never refetched; the backend also throttles repeated asks.
+   */
+  private lookUpMissingUsage() {
+    const nowS = Date.now() / 1000;
+    const all = [State.usage.fiveHour, State.usage.sevenDay, State.codexUsage.fiveHour, State.codexUsage.sevenDay];
+    if (all.some((w) => !isLive(w, nowS))) void Bridge.refreshUsage();
   }
 
   /** Applies settings coming from Rust at boot. */
@@ -1094,6 +1155,7 @@ export class Island {
     Sound.setEnabled(State.settings.soundEnabled);
     Sound.setVolume(State.settings.soundVolume);
     this.fsm.homeToPetitDelay = State.settings.autoCloseInterval;
+    this.fsm.setAutoHide(State.settings.autoCloseInterval > 0);
     State.notify();
   }
 

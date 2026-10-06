@@ -434,10 +434,10 @@ function generalSection(): HTMLElement {
       volume,
     ),
     h("div", { class: "row" },
-      h("label", { text: "Auto-close" }),
+      h("label", { text: "Auto-close / hide" }),
       autoCloseToggle,
       autoClose,
-      h("span", { class: "hint", text: "seconds after you leave the island (off = never hide)" }),
+      h("span", { class: "hint", text: "seconds after you leave the island, then it hides. Off = it stays as a mini bar with Claude and Codex weekly usage." }),
     ),
     h("div", { class: "row" },
       h("label", { text: "Island lives on" }),
@@ -474,19 +474,61 @@ async function main() {
   const present: Record<string, boolean> = {};
   for (const k of keys) present[k] = (await Bridge.secretPresent(k)) ?? false;
 
+  const pages: { id: string; label: string; group: string; el: HTMLElement }[] = [
+    { id: "general", label: "General", group: "Settings", el: generalSection() },
+    { id: "claude", label: "Claude Code", group: "Settings", el: hooksSection(status) },
+    { id: "codex", label: "Codex", group: "Settings", el: hooksSection(codexStatus, true) },
+    { id: "api", label: "Claude API", group: "Settings", el: apiSection(hasKey) },
+    { id: "integrations", label: "Integrations", group: "Customize", el: integrationsSection(present) },
+  ];
+
+  const nav = h("nav", { class: "nav" });
+  const content = h("main", { class: "content" });
+  const search = h("input", { type: "text", placeholder: "Search", class: "search" }) as HTMLInputElement;
+  const buttons = new Map<string, HTMLElement>();
+
+  function show(id: string) {
+    for (const [key, btn] of buttons) btn.classList.toggle("on", key === id);
+    clear(content);
+    const page = pages.find((p) => p.id === id)!;
+    // The section heading doubles as the page title, so the card chrome is dropped.
+    content.append(page.el);
+    content.scrollTop = 0;
+  }
+
+  let lastGroup = "";
+  for (const page of pages) {
+    if (page.group !== lastGroup) {
+      nav.append(h("div", { class: "nav-group", text: page.group }));
+      lastGroup = page.group;
+    }
+    const btn = h("button", { class: "nav-item", text: page.label, onclick: () => show(page.id) });
+    buttons.set(page.id, btn);
+    nav.append(btn);
+  }
+  search.addEventListener("input", () => {
+    const q = search.value.trim().toLowerCase();
+    for (const page of pages) {
+      buttons.get(page.id)!.style.display = !q || page.label.toLowerCase().includes(q) ? "" : "none";
+    }
+  });
+
   clear(root);
   root.append(
-    h("h1", {}, h("span", { text: "Koukou" }), h("span", { class: "version", text: version })),
-    hooksSection(status),
-    hooksSection(codexStatus, true),
-    apiSection(hasKey),
-    integrationsSection(present),
-    generalSection(),
-    h("div", {
-      class: "hint",
-      text: "No telemetry. Network requests only go to the services you configure yourself.",
-    }),
+    h("aside", { class: "sidebar" },
+      search,
+      nav,
+      h("div", { class: "version", text: version ? `Koukou ${version}` : "Koukou" }),
+    ),
+    h("div", { class: "main-col" },
+      content,
+      h("div", {
+        class: "hint foot",
+        text: "No telemetry. Network requests only go to the services you configure yourself.",
+      }),
+    ),
   );
+  show("general");
 
   void onEvent<Settings>("settings-changed", (s) => {
     settings = { ...settings, ...s };

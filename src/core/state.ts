@@ -195,6 +195,8 @@ class AppState {
 
   /** Plan usage, one value per window for the whole account (see core/usage.ts). */
   usage: Record<UsageKey, UsageWindow | null> = { fiveHour: null, sevenDay: null };
+  /** Codex plan usage, read from its session logs by the Rust side. */
+  codexUsage: Record<UsageKey, UsageWindow | null> = { fiveHour: null, sevenDay: null };
 
   lastActivity = performance.now();
 

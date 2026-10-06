@@ -6,7 +6,7 @@
 import { Bridge, onEvent } from "../core/bridge";
 import { Sound } from "../core/sound";
 import { State, isSession, type AgentTask, type AskOption, type AskQuestion } from "../core/state";
-import { mergeWindow, parseWindow, type UsageWindow } from "../core/usage";
+import { mergeWindow, parseWindow, type UsageKey, type UsageWindow } from "../core/usage";
 import type { Island } from "./island";
 
 /** Clears the approval card if no decision was made before the hook gave up. */
@@ -266,6 +266,50 @@ const idleTimers = new Map<string, number>();
 
 export function registerHookHandlers(island: Island) {
   void onEvent<HookPayload>("hook", (payload) => handleHook(island, payload));
+  const toWindow = (w: unknown): UsageWindow | null => {
+    if (!w || typeof w !== "object") return null;
+    const { pct, resetsAt } = w as Record<string, unknown>;
+    return typeof pct === "number" && typeof resetsAt === "number" ? { pct, resetsAt } : null;
+  };
+
+  // The last known limits survive a restart; a window past its reset is dropped.
+  void Bridge.usageCacheLoad().then((cached) => {
+    const c = (cached && typeof cached === "object" ? cached : {}) as Record<string, Record<string, unknown> | undefined>;
+    const nowS = Date.now() / 1000;
+    const fresh = (w: unknown) => mergeWindow(null, toWindow(w), nowS);
+    State.usage = {
+      fiveHour: State.usage.fiveHour ?? fresh(c.claude?.fiveHour),
+      sevenDay: State.usage.sevenDay ?? fresh(c.claude?.sevenDay),
+    };
+    State.codexUsage = {
+      fiveHour: State.codexUsage.fiveHour ?? fresh(c.codex?.fiveHour),
+      sevenDay: State.codexUsage.sevenDay ?? fresh(c.codex?.sevenDay),
+    };
+    State.notify();
+  });
+
+  let saved = "";
+  const persist = () => {
+    const next = JSON.stringify({ claude: State.usage, codex: State.codexUsage });
+    if (next === saved) return;
+    saved = next;
+    void Bridge.usageCacheSave({ claude: State.usage, codex: State.codexUsage });
+  };
+  State.subscribe(persist);
+
+  void onEvent<Record<UsageKey, unknown>>("codex-usage", (raw) => {
+    State.codexUsage = { fiveHour: toWindow(raw.fiveHour), sevenDay: toWindow(raw.sevenDay) };
+    State.notify();
+  });
+  // Claude's limits fetched from the account: merged like a status-line report.
+  void onEvent<Record<UsageKey, unknown>>("claude-usage", (raw) => {
+    const nowS = Date.now() / 1000;
+    State.usage = {
+      fiveHour: mergeWindow(State.usage.fiveHour, toWindow(raw.fiveHour), nowS),
+      sevenDay: mergeWindow(State.usage.sevenDay, toWindow(raw.sevenDay), nowS),
+    };
+    State.notify();
+  });
 }
 
 /** Exported for dev/sessions-preview.ts, which plays fake sessions in a browser. */
