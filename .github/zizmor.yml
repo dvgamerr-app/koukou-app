@@ -1,0 +1,12 @@
+rules:
+  # The caches only hold cargo and bun downloads, and the release jobs that
+  # publish run on tags, so a poisoned cache is accepted for the build minutes
+  # it saves.
+  cache-poisoning:
+    ignore:
+      - windows.yml
+      - linux.yml
+  # The linux-latest tag step needs the checkout token to push a tag.
+  artipacked:
+    ignore:
+      - linux.yml
