@@ -25,16 +25,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: oven-sh/setup-bun@v2
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
+          # dependencies are installed by bun (bun.lock)
 
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
 
-      - run: npm ci
+      - run: bun install --frozen-lockfile
 
       # The version lives in three files and they drift silently.
       - name: Check the tag and every version agree

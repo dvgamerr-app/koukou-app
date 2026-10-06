@@ -56,11 +56,12 @@ jobs:
             librsvg2-dev libssl-dev libdbus-1-dev patchelf \
             gstreamer1.0-plugins-base gstreamer1.0-plugins-good
 
+      - uses: oven-sh/setup-bun@v2
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
-          cache-dependency-path: package-lock.json
+          # dependencies are installed by bun (bun.lock)
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -73,7 +74,7 @@ jobs:
           restore-keys: linux-cargo-
 
       - name: Install dependencies
-        run: npm ci
+        run: bun install --frozen-lockfile
 
       # Same check as the Windows workflow: three files carry the version.
       - name: Check the tag and every version agree
