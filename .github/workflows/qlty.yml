@@ -2,7 +2,7 @@ name: Qlty
 
 # Pull requests are checked here instead of being built: the Windows and Linux
 # builds are paid runner minutes, and this job is a few seconds on Linux.
-# - `qlty check -a` lints every file (actionlint, zizmor, trufflehog, osv-scanner); only high issues fail
+# - `qlty check` lints only what the PR changes (actionlint, zizmor, trufflehog, osv-scanner); only high issues fail
 # - `qlty smells` reports duplication and complexity in the files the PR changed
 
 on:
@@ -28,7 +28,9 @@ jobs:
       - uses: qltysh/qlty-action/install@c9b09987143d1e4ac955f4803c7bea742102feb5 # v2
 
       - name: Check
-        run: qlty check -a --fail-level high --no-upgrade-check
+        env:
+          BASE_REF: ${{ github.base_ref || 'main' }}
+        run: qlty check --upstream "origin/$BASE_REF" --fail-level high --no-upgrade-check
 
       # Comment mode in .qlty/qlty.toml: smells are reported, they do not fail the job.
       - name: Smells
