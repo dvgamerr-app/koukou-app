@@ -5,6 +5,38 @@ use crate::{
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
+pub const SCRIPT_NAME: &str = "koukou-hook-codex.ps1";
+
+fn script_path() -> PathBuf {
+    settings::local_dir().join("bin").join(SCRIPT_NAME)
+}
+
+/// Embedded as well as bundled so development builds stage the same script.
+pub fn ensure_script() -> Result<(), String> {
+    let path = script_path();
+    let contents = include_bytes!("codex-hook-command.ps1");
+    if std::fs::read(&path).ok().as_deref() == Some(contents.as_slice()) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(path.parent().ok_or("Missing hook directory")?)
+        .map_err(|e| e.to_string())?;
+    std::fs::write(&path, contents).map_err(|e| format!("Can't install {}: {e}", path.display()))
+}
+
+fn command(event: &str) -> String {
+    #[cfg(windows)]
+    {
+        // Explicit -File avoids parsing multiline source as a shell command.
+        let script = script_path().to_string_lossy().replace('\\', "/").replace('\'', "''");
+        format!("powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -WindowStyle Hidden -File '{script}' -Event {event}")
+    }
+    #[cfg(not(windows))]
+    {
+        let exe = settings::hook_exe_path().to_string_lossy().replace('\'', "'\\''");
+        format!("'{exe}' {event} --codex")
+    }
+}
+
 const EVENTS: &[(&str, u64)] = &[
     ("SessionStart", 10),
     ("SessionEnd", 3),
@@ -46,7 +78,8 @@ fn ours(handler: &Value) -> bool {
         handler
             .get(*key)
             .and_then(Value::as_str)
-            .map(|s| s.contains("koukou-hook") && s.contains("--codex"))
+            .map(|s| s.contains(SCRIPT_NAME)
+                || ((s.contains("koukou-hook") || s.contains("coucou-hook")) && s.contains("--codex")))
             .unwrap_or(false)
     })
 }
@@ -91,17 +124,8 @@ fn changed(current: &Value, install: bool) -> Result<Value, String> {
         all.remove(&event);
     }
     if install {
-        let exe = settings::hook_exe_path()
-            .to_string_lossy()
-            .replace('\\', "/");
         for (event, timeout) in EVENTS {
-            // PowerShell's native call operator can create a console and leave
-            // stdin disconnected. Launch with explicit pipes and no window.
-            let budget = if *event == "PermissionRequest" { 110_000 } else { 2_000 };
-            let command = include_str!("codex-hook-command.ps1")
-                .replace("__EXE__", &exe.replace('\'', "''"))
-                .replace("__EVENT__", event)
-                .replace("__TIMEOUT_MS__", &budget.to_string());
+            let command = command(event);
             all.entry((*event).to_string())
                 .or_insert_with(|| json!([]))
                 .as_array_mut()
@@ -151,7 +175,7 @@ pub fn status() -> HookStatus {
         installed,
         settings_path: path().display().to_string(),
         hook_path: relay.display().to_string(),
-        hook_ready: relay.exists(),
+        hook_ready: relay.exists() && (!cfg!(windows) || script_path().exists()),
         usage: false,
     }
 }
@@ -176,6 +200,9 @@ pub fn write(install: bool, fingerprint: &str) -> Result<String, String> {
         return Err("hooks.json changed since the preview. Review the new diff.".into());
     }
     let next = changed(&current, install)?;
+    if install && cfg!(windows) {
+        ensure_script()?;
+    }
     let p = path();
     std::fs::create_dir_all(p.parent().ok_or("Missing Codex directory")?)
         .map_err(|e| e.to_string())?;
@@ -194,4 +221,39 @@ pub fn write(install: bool, fingerprint: &str) -> Result<String, String> {
     } else {
         "No previous file (new hooks.json)".into()
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn install_migrates_legacy_hooks_preserves_foreign_and_is_idempotent() {
+        let current = json!({"custom": true, "hooks": {"Stop": [
+            {"hooks": [
+                {"type": "command", "command": "coucou-hook.exe Stop --codex"},
+                {"type": "command", "command": "koukou-hook.exe Stop --codex"},
+                {"type": "command", "command": "other-hook.exe"}
+            ]}
+        ]}});
+        let installed = changed(&current, true).unwrap();
+        assert_eq!(installed["custom"], true);
+        assert_eq!(installed["hooks"]["Stop"][0]["hooks"].as_array().unwrap().len(), 1);
+        assert_eq!(installed["hooks"]["Stop"][0]["hooks"][0]["command"], "other-hook.exe");
+        assert_eq!(changed(&installed, true).unwrap(), installed);
+        let removed = changed(&installed, false).unwrap();
+        assert_eq!(removed["hooks"].as_object().unwrap().len(), 1);
+        assert_eq!(removed["hooks"]["Stop"].as_array().unwrap().len(), 1);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_command_calls_script_without_inline_source() {
+        let cmd = command("Stop");
+        assert!(cmd.contains("-NoProfile -NonInteractive"));
+        assert!(cmd.contains("-File '"));
+        assert!(cmd.ends_with("koukou-hook-codex.ps1' -Event Stop"));
+        assert!(!cmd.contains('\n'));
+        assert!(ours(&json!({"command": cmd})));
+    }
 }
