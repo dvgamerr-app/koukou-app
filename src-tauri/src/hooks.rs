@@ -459,6 +459,10 @@ pub fn ensure_hook_exe(app: &AppHandle) {
         return;
     };
     install_relay(&src, &dest);
+    #[cfg(windows)]
+    if let Err(err) = crate::codex_hooks::ensure_script() {
+        crate::log::line(err);
+    }
 }
 
 #[cfg(windows)]

@@ -11,9 +11,9 @@ Koukou is a fork of Coucou (MIT) that keeps only the Tauri app for Windows and L
 
 ## Build
 ```
-npm install
-npm run tauri dev      # development
-npm run pack           # installers in release/
+bun i
+bun tauri dev      # development
+bun pack           # installers in release/
 ```
 
 ## Rules

@@ -264,6 +264,15 @@ function handleStatusline(sessionId: string, raw: unknown) {
 /** Stop resets its own session to idle after a moment; one timer per session. */
 const idleTimers = new Map<string, number>();
 
+/**
+ * A /goal session fires Stop after every turn and then carries on by itself, so
+ * Stop is held back for a moment: only if nothing follows is the turn really over.
+ */
+const STOP_GRACE_MS = 4000;
+const stopTimers = new Map<string, number>();
+/** Events that mean the session is working again after a Stop. */
+const RESUME_EVENTS = new Set(["UserPromptSubmit", "PreToolUse", "PostToolUse", "SubagentStart", "PermissionRequest"]);
+
 export function registerHookHandlers(island: Island) {
   void onEvent<HookPayload>("hook", (payload) => handleHook(island, payload));
   const toWindow = (w: unknown): UsageWindow | null => {
@@ -351,6 +360,8 @@ export function handleHook(island: Island, payload: HookPayload) {
     if (t) {
       window.clearTimeout(idleTimers.get(sessionId));
       idleTimers.delete(sessionId);
+      window.clearTimeout(stopTimers.get(sessionId));
+      stopTimers.delete(sessionId);
       State.removeSession(sessionId);
     }
     State.notify();
@@ -390,6 +401,20 @@ export function handleHook(island: Island, payload: HookPayload) {
       island.reveal();
     }
   };
+
+  if (!isExternalAgent && RESUME_EVENTS.has(name)) {
+    // The session went on after Stop: the held Stop never happened (a goal still
+    // running), or its Finished card is already up and has nothing left to say.
+    if (stopTimers.has(sessionId)) {
+      window.clearTimeout(stopTimers.get(sessionId));
+      stopTimers.delete(sessionId);
+    }
+    if (State.mode === "expanded" && State.view === "finished" && State.alertTaskId === id) {
+      State.alertTaskId = null;
+      island.collapse();
+    }
+    if (task?.pillBadge === "finished") State.setPillBadge(id, null);
+  }
 
   switch (name) {
     case "SessionStart":
@@ -444,34 +469,46 @@ export function handleHook(island: Island, payload: HookPayload) {
     }
 
     case "Stop": {
-      State.updateTask(id, "finished");
-      if (payload.message) State.appendStep(id, payload.message.slice(0, 60));
-      Sound.play("finish");
-      // Every session gets its Finished card, watched or not — the card names
-      // the session, and the focus stays where it was. Only when the card would
-      // interrupt something (a decision, a message being typed…) does it fall
-      // back to the compact bar saying so for a moment.
-      if (!focused) State.setPillBadge(id, "finished");
-      if (focused || island.canPopUp()) {
-        State.alertTaskId = id;
-        surface("finished", true);
-      } else {
-        island.announce(id);
-      }
+      const finish = () => {
+        const focused = State.focusTask != null && State.focusTask.id === id;
+        State.updateTask(id, "finished");
+        if (payload.message) State.appendStep(id, payload.message.slice(0, 60));
+        Sound.play("finish");
+        // Every session gets its Finished card, watched or not — the card names
+        // the session, and the focus stays where it was. Only when the card would
+        // interrupt something (a decision, a message being typed…) does it fall
+        // back to the compact bar saying so for a moment.
+        if (!focused) State.setPillBadge(id, "finished");
+        if (focused || island.canPopUp()) {
+          State.alertTaskId = id;
+          surface("finished", true);
+        } else {
+          island.announce(id);
+        }
+        if (isExternalAgent) {
+          // An external agent's pill only lives for its turn.
+          window.setTimeout(() => State.removeTask(id), 5200);
+          return;
+        }
+        window.clearTimeout(idleTimers.get(sessionId));
+        idleTimers.set(sessionId, window.setTimeout(() => {
+          idleTimers.delete(sessionId);
+          const t = State.sessionTask(sessionId);
+          if (!t || t.state !== "finished") return;
+          // The badge is left alone: clearing it here made an unwatched session's
+          // "done" vanish five seconds later. Focusing the session clears it.
+          State.updateTask(id, "idle");
+        }, 5200));
+      };
       if (isExternalAgent) {
-        // An external agent's pill only lives for its turn.
-        window.setTimeout(() => State.removeTask(id), 5200);
+        finish();
         break;
       }
-      window.clearTimeout(idleTimers.get(sessionId));
-      idleTimers.set(sessionId, window.setTimeout(() => {
-        idleTimers.delete(sessionId);
-        const t = State.sessionTask(sessionId);
-        if (!t || t.state !== "finished") return;
-        // The badge is left alone: clearing it here made an unwatched session's
-        // "done" vanish five seconds later. Focusing the session clears it.
-        State.updateTask(id, "idle");
-      }, 5200));
+      window.clearTimeout(stopTimers.get(sessionId));
+      stopTimers.set(sessionId, window.setTimeout(() => {
+        stopTimers.delete(sessionId);
+        finish();
+      }, STOP_GRACE_MS));
       break;
     }
 
